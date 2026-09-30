@@ -690,7 +690,9 @@ internal sealed class TvRemote : IDisposable
 // --- Android スマホ (scrcpy) ---
 internal static class PhoneLink
 {
-    public static readonly string ToolsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MagicKeyBattery", "scrcpy");
+    // scrcpy: exe の隣の MagicKeyBattery-data\scrcpy があればそれ、無ければ従来の %LOCALAPPDATA%\MagicKeyBattery\scrcpy
+    public static readonly string ToolsDir =
+        Directory.Exists(Path.Combine(AppStorage.DataDir, "scrcpy")) ? Path.Combine(AppStorage.DataDir, "scrcpy") : Path.Combine(AppStorage.LegacyDir, "scrcpy");
     private static string Adb => Path.Combine(ToolsDir, "adb.exe");
     private static string Scrcpy => Path.Combine(ToolsDir, "scrcpy.exe");
 

@@ -434,3 +434,6 @@ FodyWeavers.xsd
 
 # portable build output
 dist/
+
+# settings saved next to the exe
+MagicKeyBattery-data/

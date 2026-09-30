@@ -74,15 +74,15 @@ static class Program
     // 履歴ログ (値が変わった時だけ記録)
     private static byte _lastLoggedLevel = 0;
     private static bool _lastLoggedCharging = false;
-    private static readonly string HistoryDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MagicKeyBattery");
-    private static readonly string HistoryFile = Path.Combine(HistoryDir, "history.csv");
+    // exe の隣の MagicKeyBattery-data (書き込めない場所なら %LOCALAPPDATA%)
+    private static string HistoryDir => AppStorage.DataDir;
+    private static string HistoryFile => AppStorage.HistoryFile;
     private const long HISTORY_MAX_BYTES = 512 * 1024;
 
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     private static extern bool DestroyIcon(IntPtr handle);
 
     private const string REG_RUN_KEY = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
-    private const string REG_APP_KEY = @"SOFTWARE\MagicKeyBattery\Settings";
     private const string APP_NAME = "MagicKeyBattery";
 
     // --- Win32 API 宣言 ---
@@ -892,33 +892,28 @@ static class Program
     }
     private static void SaveSettings()
     {
-        try
-        {
-            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(REG_APP_KEY))
-            {
-                key.SetValue("IntervalMinutes", _intervalMinutes);
-                key.SetValue("NotifyThreshold", _notifyThreshold);
-                key.SetValue("Language", _language);
-                key.SetValue("RemapEnabled", _remapEnabled ? 1 : 0);
-                key.SetValue("MediaKeys", _mediaKeys ? 1 : 0);
-                key.SetValue("SwapIsoKeys", _swapIsoKeys ? 1 : 0);
-                key.SetValue("DeviceSwitching", _deviceSwitching ? 1 : 0);
-                key.SetValue("TvIp", _tvIp);
-                key.SetValue("TvClientKeyProtected", ProtectSecret(_tvClientKey));
-                key.SetValue("TvCertPin", _tvCertPin);
-                key.SetValue("F15IsPc", _f15IsPc ? 1 : 0);
-                key.SetValue("RemotePcHost", _remotePcHost);
-                key.SetValue("RemotePcTokenProtected", ProtectSecret(_remotePcToken));
-                key.SetValue("RemotePcCertPin", _remotePcCertPin);
-                key.SetValue("ReceiverEnabled", _receiverEnabled ? 1 : 0);
-                key.SetValue("CriticalThreshold", _criticalThreshold);
-                key.SetValue("NotifyFull", _notifyFull ? 1 : 0);
-                key.SetValue("ShareClipboard", _shareClipboard ? 1 : 0);
-                key.SetValue("KeyMap", KeyMapping.Serialize(_keyMap));
-                key.DeleteValue("TvClientKey", false); // 旧バージョンの平文の値を削除
-            }
-        }
-        catch { }
+        // exe の隣の MagicKeyBattery-data\settings.json (AppStorage.cs)
+        SettingsStore.Set("IntervalMinutes", _intervalMinutes);
+        SettingsStore.Set("NotifyThreshold", _notifyThreshold);
+        SettingsStore.Set("Language", _language);
+        SettingsStore.Set("RemapEnabled", _remapEnabled);
+        SettingsStore.Set("MediaKeys", _mediaKeys);
+        SettingsStore.Set("SwapIsoKeys", _swapIsoKeys);
+        SettingsStore.Set("DeviceSwitching", _deviceSwitching);
+        SettingsStore.Set("TvIp", _tvIp);
+        SettingsStore.Set("TvClientKeyProtected", ProtectSecret(_tvClientKey));
+        SettingsStore.Set("TvCertPin", _tvCertPin);
+        SettingsStore.Set("F15IsPc", _f15IsPc);
+        SettingsStore.Set("RemotePcHost", _remotePcHost);
+        SettingsStore.Set("RemotePcTokenProtected", ProtectSecret(_remotePcToken));
+        SettingsStore.Set("RemotePcCertPin", _remotePcCertPin);
+        SettingsStore.Set("ReceiverEnabled", _receiverEnabled);
+        SettingsStore.Set("CriticalThreshold", _criticalThreshold);
+        SettingsStore.Set("NotifyFull", _notifyFull);
+        SettingsStore.Set("ShareClipboard", _shareClipboard);
+        SettingsStore.Set("KeyMap", KeyMapping.Serialize(_keyMap));
+        SettingsStore.Remove("TvClientKey"); // 旧バージョンの平文の値は保存しない
+        SettingsStore.Save();
     }
 
     private static void UpdateSerialMenu()
@@ -1058,43 +1053,34 @@ static class Program
 
     private static void LoadSettings()
     {
-        try
-        {
-            using (RegistryKey? key = Registry.CurrentUser.OpenSubKey(REG_APP_KEY))
-            {
-                if (key != null)
-                {
-                    _intervalMinutes = Math.Clamp(Convert.ToInt32(key.GetValue("IntervalMinutes", 3)), 1, 60);
-                    _notifyThreshold = Math.Clamp(Convert.ToInt32(key.GetValue("NotifyThreshold", 20)), 0, 100);
-                    _language = key.GetValue("Language", "")?.ToString() ?? "";
-                    _remapEnabled = Convert.ToInt32(key.GetValue("RemapEnabled", 0)) != 0;
-                    _mediaKeys = Convert.ToInt32(key.GetValue("MediaKeys", 1)) != 0;
-                    _swapIsoKeys = Convert.ToInt32(key.GetValue("SwapIsoKeys", 0)) != 0;
-                    _deviceSwitching = Convert.ToInt32(key.GetValue("DeviceSwitching", 1)) != 0;
-                    _tvIp = key.GetValue("TvIp", "")?.ToString() ?? "";
-                    _tvClientKey = UnprotectSecret(key.GetValue("TvClientKeyProtected", "")?.ToString() ?? "");
-                    _tvCertPin = key.GetValue("TvCertPin", "")?.ToString() ?? "";
-                    _f15IsPc = Convert.ToInt32(key.GetValue("F15IsPc", 0)) != 0;
-                    _remotePcHost = key.GetValue("RemotePcHost", "")?.ToString() ?? "";
-                    _remotePcToken = UnprotectSecret(key.GetValue("RemotePcTokenProtected", "")?.ToString() ?? "");
-                    _remotePcCertPin = key.GetValue("RemotePcCertPin", "")?.ToString() ?? "";
-                    _receiverEnabled = Convert.ToInt32(key.GetValue("ReceiverEnabled", 0)) != 0;
-                    _criticalThreshold = Math.Clamp(Convert.ToInt32(key.GetValue("CriticalThreshold", 10)), 0, 100);
-                    _notifyFull = Convert.ToInt32(key.GetValue("NotifyFull", 1)) != 0;
-                    _shareClipboard = Convert.ToInt32(key.GetValue("ShareClipboard", 1)) != 0;
-                    _keyMap = KeyMapping.Parse(key.GetValue("KeyMap", "")?.ToString());
+        // exe の隣の MagicKeyBattery-data\settings.json (初回は旧バージョンのレジストリから自動で移行)
+        _intervalMinutes = Math.Clamp(SettingsStore.GetInt("IntervalMinutes", 3), 1, 60);
+        _notifyThreshold = Math.Clamp(SettingsStore.GetInt("NotifyThreshold", 20), 0, 100);
+        _language = SettingsStore.GetString("Language");
+        _remapEnabled = SettingsStore.GetBool("RemapEnabled", false);
+        _mediaKeys = SettingsStore.GetBool("MediaKeys", true);
+        _swapIsoKeys = SettingsStore.GetBool("SwapIsoKeys", false);
+        _deviceSwitching = SettingsStore.GetBool("DeviceSwitching", true);
+        _tvIp = SettingsStore.GetString("TvIp");
+        _tvClientKey = UnprotectSecret(SettingsStore.GetString("TvClientKeyProtected"));
+        _tvCertPin = SettingsStore.GetString("TvCertPin");
+        _f15IsPc = SettingsStore.GetBool("F15IsPc", false);
+        _remotePcHost = SettingsStore.GetString("RemotePcHost");
+        _remotePcToken = UnprotectSecret(SettingsStore.GetString("RemotePcTokenProtected"));
+        _remotePcCertPin = SettingsStore.GetString("RemotePcCertPin");
+        _receiverEnabled = SettingsStore.GetBool("ReceiverEnabled", false);
+        _criticalThreshold = Math.Clamp(SettingsStore.GetInt("CriticalThreshold", 10), 0, 100);
+        _notifyFull = SettingsStore.GetBool("NotifyFull", true);
+        _shareClipboard = SettingsStore.GetBool("ShareClipboard", true);
+        _keyMap = KeyMapping.Parse(SettingsStore.GetString("KeyMap"));
 
-                    // 旧バージョンの平文キーがあれば暗号化して保存し直す
-                    string legacyKey = key.GetValue("TvClientKey", "")?.ToString() ?? "";
-                    if (_tvClientKey.Length == 0 && legacyKey.Length > 0)
-                    {
-                        _tvClientKey = legacyKey;
-                        _migrateLegacySecret = true;
-                    }
-                }
-            }
+        // 旧バージョンの平文キーがあれば暗号化して保存し直す
+        string legacyKey = SettingsStore.GetString("TvClientKey");
+        if (_tvClientKey.Length == 0 && legacyKey.Length > 0)
+        {
+            _tvClientKey = legacyKey;
+            _migrateLegacySecret = true;
         }
-        catch { }
 
         // 未設定 (初回起動) または不明な値の場合は OS のロケールから判定
         if (!LocalizedText.ContainsKey(_language))

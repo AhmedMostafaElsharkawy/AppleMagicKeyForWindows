@@ -438,8 +438,9 @@ internal sealed class RemoteKeyOutput : IKeyOutput
 // --- 受信側 (操作される PC) ---
 internal static class RemoteReceiver
 {
-    private const string RegKey = @"SOFTWARE\MagicKeyBattery\Receiver";
-    private static readonly string CertFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MagicKeyBattery", "receiver-cert.bin");
+    // ペアリング済みの PC と証明書は exe の隣の MagicKeyBattery-data に保存 (AppStorage.cs)
+    private const string ClientsSetting = "ReceiverClients";
+    private static string CertFile => AppStorage.ReceiverCertFile;
     private static readonly byte[] CertEntropy = Encoding.UTF8.GetBytes("MagicKeyBattery.ReceiverCert.v1");
     private const int MaxConnections = 4;
     private const int MaxPairingAttempts = 5;
@@ -513,8 +514,8 @@ internal static class RemoteReceiver
 
     public static void RemoveAllPairedDevices()
     {
-        using RegistryKey key = Registry.CurrentUser.CreateSubKey(RegKey);
-        key.DeleteValue("Clients", false);
+        SettingsStore.Remove(ClientsSetting);
+        SettingsStore.Save();
         // 接続中のものも切断するため再起動
         if (_listener != null)
         {
@@ -802,14 +803,10 @@ internal static class RemoteReceiver
     private static List<(string Name, string Hash)> LoadClients()
     {
         var clients = new List<(string, string)>();
-        using RegistryKey? key = Registry.CurrentUser.OpenSubKey(RegKey);
-        if (key?.GetValue("Clients") is string[] entries)
+        foreach (string entry in SettingsStore.GetStrings(ClientsSetting))
         {
-            foreach (string entry in entries)
-            {
-                string[] parts = entry.Split('|');
-                if (parts.Length >= 2 && parts[1].Length == 64) clients.Add((parts[0], parts[1]));
-            }
+            string[] parts = entry.Split('|');
+            if (parts.Length >= 2 && parts[1].Length == 64) clients.Add((parts[0], parts[1]));
         }
         return clients;
     }
@@ -822,8 +819,8 @@ internal static class RemoteReceiver
             if (!string.Equals(n, name, StringComparison.OrdinalIgnoreCase)) entries.Add($"{n}|{h}");
         }
         entries.Add($"{name.Replace("|", "")}|{hash}|{DateTime.Now:yyyy-MM-dd}");
-        using RegistryKey key = Registry.CurrentUser.CreateSubKey(RegKey);
-        key.SetValue("Clients", entries.ToArray(), RegistryValueKind.MultiString);
+        SettingsStore.SetStrings(ClientsSetting, entries);
+        SettingsStore.Save();
     }
 
     // 受信側の証明書 (秘密鍵を含むので DPAPI で暗号化してファイルに保存)
