@@ -32,34 +32,45 @@ internal sealed class DevicesForm : Form
         _t = translate;
         _settings = settings;
 
+        // レイアウトを止めてから作る: 拡大率に合わせた拡大 (AutoScale) を完成した画面に対して 1 回だけ行うため
+        SuspendLayout();
+
         Text = _t("devices_title");
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
+        // 96 DPI (100%) で設計したレイアウトを画面の拡大率に合わせて拡大する
+        AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(520, 712);
+        ClientSize = new Size(520, 812);
         BackColor = HistoryForm.Surface;
         ForeColor = HistoryForm.TextPrimary;
         Font = new Font("Segoe UI", 9f);
         ShowIcon = false;
+        AutoScroll = true; // 画面が小さい場合はスクロール
 
         BuildTvSection(12);
-        BuildF15Section(168);
-        BuildReceiverSection(520);
+        BuildF15Section(198);
+        BuildReceiverSection(602);
 
-        var btnClose = MakeButton(_t("devices_close"), 415, 674);
+        var btnClose = MakeButton(_t("devices_close"), 415, 768);
         btnClose.Click += (s, e) => Close();
         Controls.Add(btnClose);
+
+        Rtl.Apply(this); // アラビア語: 左右反転
+
+        ResumeLayout(false);
+        PerformLayout();
     }
 
     // --- 📺 TV (F14) ---
     private void BuildTvSection(int top)
     {
-        var txtIp = TextInput(150, top + 31, 140, _settings.TvIp);
-        var btnFind = MakeButton(_t("devices_find"), 305, top + 29);
-        var btnPair = MakeButton(_t("devices_pair"), 415, top + 29);
-        var status = Status(top + 64);
+        var txtIp = TextInput(165, top + 33, 135, _settings.TvIp);
+        var btnFind = MakeButton(_t("devices_find"), 310, top + 30);
+        var btnPair = MakeButton(_t("devices_pair"), 415, top + 30);
+        var status = Status(top + 68);
 
         btnFind.Click += async (s, e) =>
         {
@@ -85,8 +96,8 @@ internal sealed class DevicesForm : Form
 
         Controls.AddRange(new Control[]
         {
-            Header(_t("devices_tv"), top), Caption(_t("devices_tv_ip"), top + 34), txtIp, btnFind, btnPair, status,
-            Hint(_t("devices_tv_hint"), top + 88, 50)
+            Header(_t("devices_tv"), top), Caption(_t("devices_tv_ip"), top + 36), txtIp, btnFind, btnPair, status,
+            Hint(_t("devices_tv_hint"), top + 92, 78)
         });
     }
 
@@ -97,16 +108,16 @@ internal sealed class DevicesForm : Form
         var rbPc = Radio(_t("devices_f15_pc"), 260, top + 30, _settings.F15IsPc);
 
         // スマホ
-        var phonePanel = new Panel { Left = 0, Top = top + 60, Width = 520, Height = 150 };
-        var txtAddr = TextInput(150, 72, 140, "", "192.168.1.20:37123");
-        var txtCode = TextInput(150, 104, 90, "", "123456");
-        var btnPairPhone = MakeButton(_t("devices_pair"), 305, 70);
-        var btnTestPhone = MakeButton(_t("devices_test"), 415, 70);
-        var phoneStatus = Status(132);
+        var phonePanel = new Panel { Left = 0, Top = top + 64, Width = 520, Height = 194 };
+        var txtAddr = TextInput(165, 107, 135, "", "192.168.1.20:37123");
+        var txtCode = TextInput(165, 139, 90, "", "123456");
+        var btnPairPhone = MakeButton(_t("devices_pair"), 310, 105);
+        var btnTestPhone = MakeButton(_t("devices_test"), 415, 105);
+        var phoneStatus = Status(172);
         phonePanel.Controls.AddRange(new Control[]
         {
-            Hint(_t("devices_phone_hint"), 0, 66), Caption(_t("devices_pair_address"), 75), txtAddr,
-            Caption(_t("devices_pair_code"), 107), txtCode, btnPairPhone, btnTestPhone, phoneStatus
+            Hint(_t("devices_phone_hint"), 0, 100), Caption(_t("devices_pair_address"), 110), txtAddr,
+            Caption(_t("devices_pair_code"), 142), txtCode, btnPairPhone, btnTestPhone, phoneStatus
         });
 
         btnPairPhone.Click += async (s, e) =>
@@ -133,15 +144,15 @@ internal sealed class DevicesForm : Form
         }
 
         // 別の PC
-        var pcPanel = new Panel { Left = 0, Top = top + 60, Width = 520, Height = 150 };
-        var txtHost = TextInput(150, 72, 140, _settings.RemotePcHost, "192.168.1.30");
-        var txtPcCode = TextInput(150, 104, 90, "", "123456");
-        var btnPairPc = MakeButton(_t("devices_pair"), 305, 70);
-        var pcStatus = Status(132);
+        var pcPanel = new Panel { Left = 0, Top = top + 64, Width = 520, Height = 194 };
+        var txtHost = TextInput(165, 107, 135, _settings.RemotePcHost, "192.168.1.30");
+        var txtPcCode = TextInput(165, 139, 90, "", "123456");
+        var btnPairPc = MakeButton(_t("devices_pair"), 310, 105);
+        var pcStatus = Status(172);
         pcPanel.Controls.AddRange(new Control[]
         {
-            Hint(_t("devices_pc_hint"), 0, 66), Caption(_t("devices_pc_address"), 75), txtHost,
-            Caption(_t("devices_pair_code"), 107), txtPcCode, btnPairPc, pcStatus
+            Hint(_t("devices_pc_hint"), 0, 100), Caption(_t("devices_pc_address"), 110), txtHost,
+            Caption(_t("devices_pair_code"), 142), txtPcCode, btnPairPc, pcStatus
         });
         if (_settings.RemotePcHost.Length > 0) pcStatus.Text = $"✔ {_t("devices_paired")}: {_settings.RemotePcHost}";
 
@@ -175,8 +186,8 @@ internal sealed class DevicesForm : Form
         UpdatePanels();
 
         Controls.AddRange(new Control[] { Header(_t("devices_f15"), top), rbPhone, rbPc, phonePanel, pcPanel });
-        Controls.Add(new Label { Left = 16, Top = top + 235, Width = 488, Height = 1, BackColor = HistoryForm.GridLine });
-        Controls.Add(Hint(_t("devices_f15_note"), top + 245, 90));
+        Controls.Add(new Label { Left = 16, Top = top + 268, Width = 488, Height = 1, BackColor = HistoryForm.GridLine });
+        Controls.Add(Hint(_t("devices_f15_note"), top + 278, 112));
     }
 
     // --- この PC を別の PC から操作できるようにする (受信) ---
@@ -184,16 +195,16 @@ internal sealed class DevicesForm : Form
     {
         var chkReceiver = new CheckBox
         {
-            Text = _t("devices_receiver_enable"), Left = 16, Top = top + 30, Width = 490, Checked = _settings.ReceiverEnabled,
+            Text = _t("devices_receiver_enable"), Left = 16, Top = top + 30, Width = 490, Height = 28, Checked = _settings.ReceiverEnabled,
             ForeColor = HistoryForm.TextSecondary
         };
-        var lblAddress = Hint("", top + 56, 20);
-        var btnCode = MakeButton(_t("devices_receiver_code"), 16, top + 80);
+        var lblAddress = Hint("", top + 62, 22);
+        var btnCode = MakeButton(_t("devices_receiver_code"), 16, top + 88);
         btnCode.Width = 180;
-        var lblCode = new Label { Left = 210, Top = top + 78, Width = 300, Height = 30, ForeColor = HistoryForm.TextPrimary, Font = new Font("Segoe UI Semibold", 14f) };
-        var btnForget = MakeButton(_t("devices_receiver_forget"), 16, top + 114);
+        var lblCode = new Label { Left = 210, Top = top + 86, Width = 300, Height = 34, ForeColor = HistoryForm.TextPrimary, Font = new Font("Segoe UI Semibold", 14f) };
+        var btnForget = MakeButton(_t("devices_receiver_forget"), 16, top + 126);
         btnForget.Width = 180;
-        var status = Status(top + 116);
+        var status = Status(top + 130);
         status.Left = 210;
         status.Width = 300;
 
@@ -254,9 +265,9 @@ internal sealed class DevicesForm : Form
         Font = new Font("Segoe UI Semibold", 10.5f)
     };
 
-    private static Label Caption(string text, int top) => new Label { Text = text, Left = 16, Top = top, Width = 130, ForeColor = HistoryForm.TextSecondary };
+    private static Label Caption(string text, int top) => new Label { Text = text, Left = 16, Top = top, Width = 145, Height = 24, ForeColor = HistoryForm.TextSecondary };
 
-    private static Label Status(int top) => new Label { Left = 16, Top = top, Width = 490, Height = 20, ForeColor = HistoryForm.TextSecondary };
+    private static Label Status(int top) => new Label { Left = 16, Top = top, Width = 490, Height = 22, ForeColor = HistoryForm.TextSecondary };
 
     private static Label Hint(string text, int top, int height) => new Label { Text = text, Left = 16, Top = top, Width = 490, Height = height, ForeColor = HistoryForm.TextMuted };
 
@@ -268,14 +279,14 @@ internal sealed class DevicesForm : Form
 
     private static RadioButton Radio(string text, int left, int top, bool isChecked) => new RadioButton
     {
-        Text = text, Left = left, Top = top, Width = 230, Checked = isChecked, ForeColor = HistoryForm.TextSecondary
+        Text = text, Left = left, Top = top, Width = 230, Height = 28, Checked = isChecked, ForeColor = HistoryForm.TextSecondary
     };
 
     private static Button MakeButton(string text, int left, int top)
     {
         var btn = new Button
         {
-            Text = text, Left = left, Top = top, Width = 90, Height = 27,
+            Text = text, Left = left, Top = top, Width = 95, Height = 30,
             FlatStyle = FlatStyle.Flat, BackColor = HistoryForm.SurfaceRaised, ForeColor = HistoryForm.TextPrimary, Cursor = Cursors.Hand
         };
         btn.FlatAppearance.BorderColor = HistoryForm.GridLine;

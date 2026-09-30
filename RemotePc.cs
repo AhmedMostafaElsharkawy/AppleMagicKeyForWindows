@@ -35,9 +35,43 @@ internal static class RemoteProtocol
     public const byte FrameReleaseAll = 2;
     public const byte FramePing = 3;
     public const byte FrameLock = 4;
+    public const byte FrameClipboard = 5; // [5][0][長さ 4 バイト] + UTF-8 テキスト (双方向)
 
     public const int FrameSize = 6; // [種類][フラグ][vk 2 バイト][scan 2 バイト]
     public const int MaxLineBytes = 4096;
+
+    // 接続時に双方が対応している機能を伝え合う (古いバージョンとも接続できるように)
+    public const string FeatureClipboard = "clipboard";
+
+    public static byte[] BuildClipboardFrame(string text)
+    {
+        byte[] payload = Encoding.UTF8.GetBytes(text);
+        var frame = new byte[FrameSize + payload.Length];
+        frame[0] = FrameClipboard;
+        BitConverter.TryWriteBytes(frame.AsSpan(2, 4), payload.Length);
+        payload.CopyTo(frame, FrameSize);
+        return frame;
+    }
+
+    // クリップボードの本文を読む (ヘッダーの長さが上限を超えていたら不正な通信とみなす)
+    public static async Task<string?> ReadClipboardPayloadAsync(Stream stream, byte[] header, CancellationToken ct)
+    {
+        int length = BitConverter.ToInt32(header, 2);
+        if (length < 0 || length > ClipboardSync.MaxBytes) return null;
+        var payload = new byte[length];
+        await stream.ReadExactlyAsync(payload, ct).ConfigureAwait(false);
+        return Encoding.UTF8.GetString(payload);
+    }
+
+    public static bool HasFeature(JsonNode? message, string feature)
+    {
+        if (message?["features"] is not JsonArray features) return false;
+        foreach (JsonNode? f in features)
+        {
+            if (f is JsonValue v && v.TryGetValue(out string? s) && s == feature) return true;
+        }
+        return false;
+    }
 
     public static string CertHash(X509Certificate cert)
     {
@@ -96,8 +130,14 @@ internal sealed class RemoteLink : IDisposable
     public string Host => _host;
     public bool Connected => _ssl != null;
 
+    // 相手もクリップボード共有に対応していて、有効にしているか
+    public bool ClipboardSupported { get; private set; }
+
     // 接続が切れた時 (入力先を PC に戻すため)
     public event Action<string>? Disconnected;
+
+    // 相手の PC でコピーされたテキスト (スレッドプールから呼ばれる)
+    public event Action<string>? ClipboardReceived;
 
     public RemoteLink(string host, byte[] token, string certPin)
     {
@@ -117,7 +157,8 @@ internal sealed class RemoteLink : IDisposable
 
             using var authTimeout = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
             authTimeout.CancelAfter(TimeSpan.FromSeconds(8));
-            await RemoteProtocol.WriteLineAsync(ssl, new { type = "auth", token = Convert.ToBase64String(_token) }, authTimeout.Token).ConfigureAwait(false);
+            string[] features = ClipboardSync.Enabled ? new[] { RemoteProtocol.FeatureClipboard } : Array.Empty<string>();
+            await RemoteProtocol.WriteLineAsync(ssl, new { type = "auth", token = Convert.ToBase64String(_token), features }, authTimeout.Token).ConfigureAwait(false);
             JsonNode? reply = await RemoteProtocol.ReadLineAsync(ssl, authTimeout.Token).ConfigureAwait(false);
             if (reply?["ok"]?.GetValue<bool>() != true)
             {
@@ -129,10 +170,11 @@ internal sealed class RemoteLink : IDisposable
             _tcp = tcp;
             _ssl = ssl;
             _cts = cts;
+            ClipboardSupported = ClipboardSync.Enabled && RemoteProtocol.HasFeature(reply, RemoteProtocol.FeatureClipboard);
             // 送信待ちが溜まりすぎたら (相手が止まっている) 切断する
             _queue = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(512) { SingleReader = true, FullMode = BoundedChannelFullMode.DropWrite });
             _ = Task.Run(() => WriterLoopAsync(ssl, _queue, cts.Token));
-            _ = Task.Run(() => WatchCloseAsync(ssl, cts.Token));
+            _ = Task.Run(() => ReaderLoopAsync(ssl, cts.Token));
             return null;
         }
         catch (AuthenticationException)
@@ -154,11 +196,20 @@ internal sealed class RemoteLink : IDisposable
 
     public void Lock() => Enqueue(RemoteProtocol.FrameLock, 0, 0, 0);
 
-    private void Enqueue(byte type, byte flags, ushort vk, ushort scan)
+    // この PC でコピーしたテキストを相手に送る
+    public void SendClipboard(string text)
+    {
+        if (!ClipboardSupported || string.IsNullOrEmpty(text)) return;
+        EnqueueFrame(RemoteProtocol.BuildClipboardFrame(text));
+    }
+
+    private void Enqueue(byte type, byte flags, ushort vk, ushort scan) =>
+        EnqueueFrame(new byte[] { type, flags, (byte)vk, (byte)(vk >> 8), (byte)scan, (byte)(scan >> 8) });
+
+    private void EnqueueFrame(byte[] frame)
     {
         Channel<byte[]>? queue = _queue;
         if (queue == null) return;
-        byte[] frame = { type, flags, (byte)vk, (byte)(vk >> 8), (byte)scan, (byte)(scan >> 8) };
         if (!queue.Writer.TryWrite(frame)) Fail("Send queue full");
     }
 
@@ -192,14 +243,32 @@ internal sealed class RemoteLink : IDisposable
         catch { }
     }
 
-    // 受信側から何か届くのは切断の時だけ
-    private async Task WatchCloseAsync(SslStream ssl, CancellationToken ct)
+    // 受信側から届くのはクリップボードだけ (それ以外は不正な通信として切断)
+    private async Task ReaderLoopAsync(SslStream ssl, CancellationToken ct)
     {
-        var buffer = new byte[64];
+        var header = new byte[RemoteProtocol.FrameSize];
         try
         {
-            while (await ssl.ReadAsync(buffer, ct).ConfigureAwait(false) > 0) { }
-            if (!ct.IsCancellationRequested) Fail("Connection closed");
+            while (!ct.IsCancellationRequested)
+            {
+                await ssl.ReadExactlyAsync(header, ct).ConfigureAwait(false);
+                if (header[0] != RemoteProtocol.FrameClipboard || !ClipboardSupported)
+                {
+                    Fail("Unexpected data from the other PC");
+                    return;
+                }
+                string? text = await RemoteProtocol.ReadClipboardPayloadAsync(ssl, header, ct).ConfigureAwait(false);
+                if (text == null)
+                {
+                    Fail("Clipboard data too large");
+                    return;
+                }
+                ClipboardReceived?.Invoke(text);
+            }
+        }
+        catch (EndOfStreamException) when (!ct.IsCancellationRequested)
+        {
+            Fail("Connection closed");
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
@@ -539,10 +608,78 @@ internal static class RemoteReceiver
             await RemoteProtocol.WriteLineAsync(ssl, new { ok = false, error = "Not authorized (pair again)" }, ct).ConfigureAwait(false);
             return;
         }
-        await RemoteProtocol.WriteLineAsync(ssl, new { ok = true }, ct).ConfigureAwait(false);
+
+        // クリップボード共有: 両方の PC で有効な時だけ
+        bool clipboard = ClipboardSync.Enabled && RemoteProtocol.HasFeature(hello, RemoteProtocol.FeatureClipboard);
+        string[] features = clipboard ? new[] { RemoteProtocol.FeatureClipboard } : Array.Empty<string>();
+        await RemoteProtocol.WriteLineAsync(ssl, new { ok = true, features }, ct).ConfigureAwait(false);
         Status?.Invoke($"⌨ {clientName}");
 
-        await ReceiveKeysAsync(ssl, ct).ConfigureAwait(false);
+        var session = new Session(ssl, clipboard);
+        lock (_sessions) _sessions.Add(session);
+        try
+        {
+            await ReceiveKeysAsync(session, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_sessions) _sessions.Remove(session);
+        }
+    }
+
+    // --- クリップボード共有 ---
+
+    // 認証済みの接続 (書き込みは 1 本ずつ)
+    private sealed class Session
+    {
+        public SslStream Ssl { get; }
+        public bool Clipboard { get; }
+        public SemaphoreSlim WriteLock { get; } = new(1, 1);
+
+        public Session(SslStream ssl, bool clipboard)
+        {
+            Ssl = ssl;
+            Clipboard = clipboard;
+        }
+    }
+
+    private static readonly List<Session> _sessions = new();
+
+    // 操作している PC から届いたテキスト (スレッドプールから呼ばれる)
+    public static event Action<string>? ClipboardReceived;
+
+    // この PC でコピーしたテキストを、操作している PC に送る
+    public static void BroadcastClipboard(string text)
+    {
+        Session[] targets;
+        lock (_sessions) targets = _sessions.FindAll(s => s.Clipboard).ToArray();
+        if (targets.Length == 0 || string.IsNullOrEmpty(text)) return;
+
+        byte[] frame = RemoteProtocol.BuildClipboardFrame(text);
+        foreach (Session session in targets)
+        {
+            _ = Task.Run(async () =>
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                try
+                {
+                    await session.WriteLock.WaitAsync(timeout.Token).ConfigureAwait(false);
+                    try
+                    {
+                        await session.Ssl.WriteAsync(frame, timeout.Token).ConfigureAwait(false);
+                        await session.Ssl.FlushAsync(timeout.Token).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        session.WriteLock.Release();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"RemoteReceiver clipboard: {ex.Message}");
+                }
+            });
+        }
     }
 
     private static async Task HandlePairAsync(SslStream ssl, JsonNode hello, CancellationToken ct)
@@ -586,8 +723,9 @@ internal static class RemoteReceiver
         Status?.Invoke($"✔ {name}");
     }
 
-    private static async Task ReceiveKeysAsync(SslStream ssl, CancellationToken ct)
+    private static async Task ReceiveKeysAsync(Session session, CancellationToken ct)
     {
+        SslStream ssl = session.Ssl;
         // この接続で押されたままのキー (切断時にすべて離す)
         var down = new HashSet<(ushort Vk, ushort Scan, bool Extended)>();
         var frame = new byte[RemoteProtocol.FrameSize];
@@ -619,6 +757,12 @@ internal static class RemoteReceiver
                     case RemoteProtocol.FrameLock:
                         ReleaseAll(down);
                         LockWorkStation();
+                        break;
+                    case RemoteProtocol.FrameClipboard:
+                        if (!session.Clipboard) return; // 共有していない接続からは受け取らない
+                        string? text = await RemoteProtocol.ReadClipboardPayloadAsync(ssl, frame, ct).ConfigureAwait(false);
+                        if (text == null) return; // 大きすぎる → 切断
+                        ClipboardReceived?.Invoke(text);
                         break;
                     default:
                         return;

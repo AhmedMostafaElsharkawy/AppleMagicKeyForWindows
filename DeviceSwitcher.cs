@@ -53,6 +53,8 @@ internal static class DeviceSwitcher
 
         _remote = new RemoteLink(host.Trim(), token, certPin);
         _remoteOutput = new RemoteKeyOutput(_remote);
+        // 相手の PC でコピーしたテキストをこの PC のクリップボードへ (クリップボードは UI スレッドで)
+        _remote.ClipboardReceived += text => _ui?.Post(_ => ClipboardSync.SetFromRemote(text), null);
         _remote.Disconnected += reason => _ui?.Post(_ =>
         {
             if (Mode != DeviceMode.RemotePc) return;
@@ -60,6 +62,12 @@ internal static class DeviceSwitcher
             SetMode(DeviceMode.Pc);
             Badge.Flash($"🖥 {_t("remote_disconnected")}: {reason}", 4000);
         }, null);
+    }
+
+    // この PC のクリップボードが変わった時 (別の PC を操作中なら送る)
+    public static void OnLocalClipboardChanged(string text)
+    {
+        if (Mode == DeviceMode.RemotePc && _remote?.Connected == true) _remote.SendClipboard(text);
     }
 
     private static void LeaveRemotePc()
@@ -176,6 +184,10 @@ internal static class DeviceSwitcher
                     {
                         KeyboardRemapper.SetOutput(_remoteOutput);
                         SetMode(DeviceMode.RemotePc);
+
+                        // この PC でコピーした内容を相手でも貼り付けられるように送っておく
+                        if (_remote.ClipboardSupported && ClipboardSync.ReadShareableText() is string clip)
+                            _remote.SendClipboard(clip);
                     }
                     else
                     {
@@ -938,6 +950,8 @@ internal sealed class ModeBadge : Form
 
     protected override void OnPaint(PaintEventArgs e)
     {
-        TextRenderer.DrawText(e.Graphics, _text, Font, ClientRectangle, ForeColor, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+        TextFormatFlags flags = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine;
+        if (Rtl.Enabled) flags |= TextFormatFlags.RightToLeft;
+        TextRenderer.DrawText(e.Graphics, _text, Font, ClientRectangle, ForeColor, flags);
     }
 }

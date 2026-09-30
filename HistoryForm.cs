@@ -47,8 +47,13 @@ internal sealed class HistoryForm : Form
         _historyFile = historyFile;
         _threshold = notifyThreshold;
 
+        // レイアウトを止めてから作る: 拡大率に合わせた拡大 (AutoScale) を完成した画面に対して 1 回だけ行うため
+        SuspendLayout();
+
         Text = _t("history_title");
         StartPosition = FormStartPosition.CenterScreen;
+        // 96 DPI (100%) で設計したレイアウトを画面の拡大率に合わせて拡大する (150% などで文字が詰まらないように)
+        AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
         ClientSize = new Size(760, 480);
         MinimumSize = new Size(520, 380);
@@ -119,7 +124,17 @@ internal sealed class HistoryForm : Form
         layout.Controls.Add(buttons, 0, 3);
         Controls.Add(layout);
 
+        // アラビア語: 並びを右から左に (レイアウトパネルが自分で反転する)。グラフは時間が左→右のまま
+        if (Rtl.Enabled)
+        {
+            Rtl.Apply(this);
+            _chart.RightToLeft = RightToLeft.No;
+        }
+
         ReloadData();
+
+        ResumeLayout(false);
+        PerformLayout();
     }
 
     // Program から新しい記録が追加された時にも呼ばれる
@@ -213,22 +228,7 @@ internal sealed class HistoryForm : Form
         HistoryPoint last = _points[^1];
         _tileCurrent.SetValue($"{last.Level}%" + (last.Charging ? " ⚡" : ""));
 
-        // 平均消費: 表示期間内の「充電していない & 残量が減った」区間だけを集計
-        double droppedPercent = 0;
-        double dischargeHours = 0;
-        for (int i = 1; i < _points.Count; i++)
-        {
-            HistoryPoint a = _points[i - 1], b = _points[i];
-            if (b.Time < rangeStart) continue;
-            if (a.Charging || b.Charging || b.Level > a.Level) continue;
-
-            double hours = (b.Time - a.Time).TotalHours;
-            if (hours <= 0) continue;
-            droppedPercent += a.Level - b.Level;
-            dischargeHours += hours;
-        }
-
-        double perDay = dischargeHours >= 1 && droppedPercent > 0 ? droppedPercent / dischargeHours * 24 : 0;
+        double perDay = DrainPerDay(_points, rangeStart);
         if (perDay > 0)
         {
             _tileDrain.SetValue(string.Format(CultureInfo.CurrentCulture, _t("stat_drain_value"), perDay));
@@ -280,6 +280,26 @@ internal sealed class HistoryForm : Form
         }
     }
 
+    // 平均消費 (%/日): 期間内の「充電していない & 残量が減った」区間だけを集計。データ不足なら 0
+    // (低残量の通知で「残り約 N 日」を出すのにも使う)
+    internal static double DrainPerDay(List<HistoryPoint> points, DateTime since)
+    {
+        double droppedPercent = 0;
+        double dischargeHours = 0;
+        for (int i = 1; i < points.Count; i++)
+        {
+            HistoryPoint a = points[i - 1], b = points[i];
+            if (b.Time < since) continue;
+            if (a.Charging || b.Charging || b.Level > a.Level) continue;
+
+            double hours = (b.Time - a.Time).TotalHours;
+            if (hours <= 0) continue;
+            droppedPercent += a.Level - b.Level;
+            dischargeHours += hours;
+        }
+        return dischargeHours >= 1 && droppedPercent > 0 ? droppedPercent / dischargeHours * 24 : 0;
+    }
+
     // 退避ファイル (.old.csv) → 現在のファイルの順に読み込む
     internal static List<HistoryPoint> LoadHistory(string historyFile)
     {
@@ -319,7 +339,8 @@ internal sealed class StatTile : Control
         _caption = caption;
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
         Dock = DockStyle.Fill;
-        Height = 64;
+        // 96 DPI での高さ (見出し + 大きな数値)。拡大率に合わせた拡大はフォームの AutoScale が行う
+        Height = 66;
         Margin = new Padding(0, 0, 8, 0);
         BackColor = HistoryForm.SurfaceRaised;
     }
@@ -328,21 +349,6 @@ internal sealed class StatTile : Control
     {
         _value = value;
         Invalidate();
-    }
-
-    // 高さを DPI に合わせる (見出し + 大きな数値が収まる高さ)
-    private void UpdateHeightForDpi() => Height = (int)Math.Ceiling(66 * DeviceDpi / 96f);
-
-    protected override void OnHandleCreated(EventArgs e)
-    {
-        base.OnHandleCreated(e);
-        UpdateHeightForDpi();
-    }
-
-    protected override void OnDpiChangedAfterParent(EventArgs e)
-    {
-        base.OnDpiChangedAfterParent(e);
-        UpdateHeightForDpi();
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -357,6 +363,16 @@ internal sealed class StatTile : Control
         using var valueBrush = new SolidBrush(HistoryForm.TextPrimary);
 
         float pad = 10 * scale;
+        if (RightToLeft == RightToLeft.Yes)
+        {
+            // アラビア語: 右寄せ
+            using var format = new StringFormat(StringFormatFlags.DirectionRightToLeft | StringFormatFlags.NoWrap) { Trimming = StringTrimming.EllipsisCharacter };
+            var captionRect = new RectangleF(pad, 6 * scale, Width - pad * 2, 20 * scale);
+            var valueRect = new RectangleF(pad, 24 * scale, Width - pad * 2, Height - 24 * scale);
+            g.DrawString(_caption, captionFont, captionBrush, captionRect, format);
+            g.DrawString(_value, valueFont, valueBrush, valueRect, format);
+            return;
+        }
         g.DrawString(_caption, captionFont, captionBrush, pad, 6 * scale);
         g.DrawString(_value, valueFont, valueBrush, pad, 24 * scale);
     }

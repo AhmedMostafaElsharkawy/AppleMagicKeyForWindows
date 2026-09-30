@@ -97,44 +97,17 @@ internal static class KeyboardRemapper
     private const ushort VK_VOLUME_MUTE = 0xAD, VK_VOLUME_DOWN = 0xAE, VK_VOLUME_UP = 0xAF;
     private const ushort VK_MEDIA_NEXT = 0xB0, VK_MEDIA_PREV = 0xB1, VK_MEDIA_PLAY_PAUSE = 0xB3, VK_LAUNCH_APP2 = 0xB7;
 
-    // 物理キー → 送るキー (vk, scan, extended)
-    private readonly record struct KeyOut(ushort Vk, ushort Scan, bool Extended);
+    // 各キーの動作 (設定画面「キー配置」で変更できる。初期値は MX Keys 配列)
+    private static Dictionary<uint, KeyAction> _map = KeyMapping.Defaults();
 
-    private static readonly Dictionary<uint, KeyOut> ModifierMap = new()
+    public static void SetMapping(IReadOnlyDictionary<uint, KeyAction> map)
     {
-        [VK_LMENU] = new KeyOut(VK_LWIN, 0x5B, true),      // 左 option  → Win
-        [VK_LWIN] = new KeyOut(VK_LMENU, 0x38, false),     // 左 command → Alt
-        [VK_RWIN] = new KeyOut(VK_RMENU, 0x38, true),      // 右 command → AltGr (右 Alt)
-        [VK_RMENU] = new KeyOut(VK_RCONTROL, 0x1D, true),  // 右 option  → 右 Ctrl
-    };
-
-    // 押している間ずっと別のキーとして送るもの (押下/解放をそのまま対応させる)
-    private static readonly Dictionary<uint, KeyOut> KeyMap = new()
-    {
-        [VK_F16] = new KeyOut(VK_LAUNCH_APP2, 0, true),    // 電卓
-        [VK_F17] = new KeyOut(VK_SNAPSHOT, 0x37, true),    // Print Screen
-        [VK_F18] = new KeyOut(VK_APPS, 0x5D, true),        // コンテキストメニュー
-    };
-
-    private enum MediaAction { None, BrightnessDown, BrightnessUp, TaskView, Start, Prev, PlayPause, Next, Mute, VolumeDown, VolumeUp }
-
-    // Magic Keyboard の F キーに印刷されているアイコンに合わせる (F5/F6 はアイコン無し → 通常の F5/F6)
-    // F2 は「名前の変更」でよく使うので常に通常の F2 (明るさ +10 には割り当てない)
-    private static MediaAction MediaActionFor(uint vk) => vk switch
-    {
-        0x70 => MediaAction.BrightnessDown,
-        0x72 => MediaAction.TaskView,
-        0x73 => MediaAction.Start,
-        0x76 => MediaAction.Prev,
-        0x77 => MediaAction.PlayPause,
-        0x78 => MediaAction.Next,
-        0x79 => MediaAction.Mute,
-        0x7A => MediaAction.VolumeDown,
-        0x7B => MediaAction.VolumeUp,
-        _ => MediaAction.None
-    };
-
-    private static bool IsRepeatable(MediaAction a) => a is MediaAction.BrightnessDown or MediaAction.BrightnessUp or MediaAction.VolumeDown or MediaAction.VolumeUp;
+        lock (_sync)
+        {
+            ReleaseHeldKeys();
+            _map = new Dictionary<uint, KeyAction>(map);
+        }
+    }
 
     private static IntPtr _hook = IntPtr.Zero;
     private static LowLevelKeyboardProc? _proc; // GC に回収されないよう保持
@@ -346,11 +319,21 @@ internal static class KeyboardRemapper
             return false;
         }
 
-        // --- F13 / F14 / F15: 入力先の切り替え (PC / TV / スマホ or 別の PC) ---
-        if (SwitchingEnabled && !up && vk >= VK_F13 && vk <= VK_F15)
+        KeyAction action = _map.TryGetValue(vk, out KeyAction mapped) ? mapped : KeyAction.Default;
+
+        // --- 入力先の切り替え (初期値 F13 / F14 / F15 → PC / TV / スマホ or 別の PC) ---
+        // TV モード中でも PC に戻れるよう、TV への転送より先に処理する
+        if (SwitchingEnabled && KeyMapping.IsSwitch(action))
         {
-            if (_heldSwallowed.Add(vk)) // キーリピートは無視
-                DeviceSwitcher.RequestSwitch(vk == VK_F13 ? DeviceMode.Pc : vk == VK_F14 ? DeviceMode.Tv : DeviceSwitcher.F15Mode);
+            if (!up && _heldSwallowed.Add(vk)) // キーリピートは無視
+            {
+                DeviceSwitcher.RequestSwitch(action switch
+                {
+                    KeyAction.SwitchToPc => DeviceMode.Pc,
+                    KeyAction.SwitchToTv => DeviceMode.Tv,
+                    _ => DeviceSwitcher.F15Mode
+                });
+            }
             return true;
         }
 
@@ -363,18 +346,12 @@ internal static class KeyboardRemapper
 
         if (!RemapEnabled) return false;
 
-        // AltGr 配列では右 Alt を押すと偽の左 Ctrl (scan 0x21D) が付いてくる → 右 option は右 Ctrl にするので捨てる
-        if (vk == VK_LCONTROL && scan == 0x21D) return true;
+        // AltGr 配列では右 Alt を押すと偽の左 Ctrl (scan 0x21D) が付いてくる
+        // → 右 option を別のキーにしている時だけ捨てる (AltGr のままなら必要)
+        if (vk == VK_LCONTROL && scan == 0x21D)
+            return _map.TryGetValue(VK_RMENU, out KeyAction rightOption) && rightOption != KeyAction.Default;
 
         if (up) return false;
-
-        // --- 修飾キー / 単純な置き換え ---
-        if (ModifierMap.TryGetValue(vk, out KeyOut mod) || KeyMap.TryGetValue(vk, out mod))
-        {
-            _heldRemapped[vk] = (mod, _output);
-            _output.Key(mod.Vk, mod.Scan, mod.Extended, up: false);
-            return true;
-        }
 
         // --- ドイツ語 ISO 配列: Apple は ^ と < のキーコードが PC と逆 ---
         if (SwapIsoKeys && !extended && (scan == 0x29 || scan == 0x56))
@@ -385,59 +362,52 @@ internal static class KeyboardRemapper
             return true;
         }
 
-        // --- F19: PC をロック (Win+L は送信できないため API で) ---
-        if (vk == VK_F19)
+        if (action == KeyAction.Default) return false;
+
+        // F1〜F12: 「メディアキー」がオフ、または修飾キーを押している間は通常の F キー (Alt+F4, Ctrl+F5 など)
+        // (押している最中のキーは最後まで同じ動作を続ける)
+        bool topRow = vk >= VK_F1 && vk <= VK_F12;
+        bool alreadyHeld = _heldRemapped.ContainsKey(vk) || _heldMedia.Contains(vk);
+        if (topRow && !alreadyHeld && (!MediaKeys || _output.AnyModifierDown())) return false;
+
+        if (action == KeyAction.Disabled)
         {
             _heldSwallowed.Add(vk);
-            _output.Lock();
             return true;
         }
 
-        // --- F1〜F12: メディアキー ---
-        if (vk >= VK_F1 && vk <= VK_F12)
+        // --- 押している間そのキーとして送る (修飾キー・メディア・音量など。キーリピートもそのまま) ---
+        if (KeyMapping.TryGetHeldOutput(action, out KeyOut output))
         {
-            MediaAction action = MediaActionFor(vk);
-            if (action == MediaAction.None) return false;
-
-            // キーリピート: 音量・明るさだけ繰り返す
-            if (_heldMedia.Contains(vk))
-            {
-                if (IsRepeatable(action)) Perform(action);
-                return true;
-            }
-
-            // 修飾キーを押している間は通常の F キー (Alt+F4, Ctrl+F5 など)
-            if (!MediaKeys || _output.AnyModifierDown()) return false;
-
-            _heldMedia.Add(vk);
-            Perform(action);
+            // キーリピート: 音量・修飾キー以外は無視 (再生/一時停止が何度も切り替わる・電卓が何個も開くのを防ぐ)
+            if (_heldRemapped.ContainsKey(vk) && !KeyMapping.RepeatsWhileHeld(action)) return true;
+            _heldRemapped[vk] = (output, _output);
+            _output.Key(output.Vk, output.Scan, output.Extended, up: false);
             return true;
         }
 
-        return false;
+        // --- 1 回だけ実行する操作 (キーリピートでは明るさだけ繰り返す) ---
+        if (_heldMedia.Contains(vk))
+        {
+            if (KeyMapping.IsRepeatable(action)) Perform(action);
+            return true;
+        }
+        _heldMedia.Add(vk);
+        Perform(action);
+        return true;
     }
 
-    private static void Perform(MediaAction action)
+    private static void Perform(KeyAction action)
     {
         switch (action)
         {
-            case MediaAction.BrightnessDown: _output.Brightness(-10); break;
-            case MediaAction.BrightnessUp: _output.Brightness(+10); break;
-            case MediaAction.TaskView: SendChord(new KeyOut(VK_LWIN, 0x5B, true), new KeyOut(VK_TAB, 0x0F, false)); break;
-            case MediaAction.Start: SendChord(new KeyOut(VK_LWIN, 0x5B, true)); break;
-            case MediaAction.Prev: Tap(VK_MEDIA_PREV); break;
-            case MediaAction.PlayPause: Tap(VK_MEDIA_PLAY_PAUSE); break;
-            case MediaAction.Next: Tap(VK_MEDIA_NEXT); break;
-            case MediaAction.Mute: Tap(VK_VOLUME_MUTE); break;
-            case MediaAction.VolumeDown: Tap(VK_VOLUME_DOWN); break;
-            case MediaAction.VolumeUp: Tap(VK_VOLUME_UP); break;
+            case KeyAction.BrightnessDown: _output.Brightness(-10); return;
+            case KeyAction.BrightnessUp: _output.Brightness(+10); return;
+            case KeyAction.LockPc: _output.Lock(); return; // Win+L は送信できないため API で
         }
-    }
 
-    private static void Tap(ushort vk)
-    {
-        _output.Key(vk, 0, true, up: false);
-        _output.Key(vk, 0, true, up: true);
+        KeyOut[]? chord = KeyMapping.ChordFor(action);
+        if (chord != null) SendChord(chord);
     }
 
     // 例: Win+Tab → Win↓ Tab↓ Tab↑ Win↑

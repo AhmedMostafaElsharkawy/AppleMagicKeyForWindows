@@ -33,6 +33,18 @@ static class Program
     // 内部設定値（レジストリ同期用）
     private static int _intervalMinutes = 3;
     private static int _notifyThreshold = 20;
+    private static int _criticalThreshold = 10;   // 2 回目の緊急の警告
+    private static bool _notifyFull = true;       // 100% になったら「ケーブルを外せます」
+    private static bool _hasNotifiedCritical = false;
+    private static bool _hasNotifiedFull = false;
+    private static byte _previousLevel = 0;       // 満充電の検出用 (前回の残量)
+
+    // キー配置 (「キー配置」画面で変更)
+    private static Dictionary<uint, KeyAction> _keyMap = KeyMapping.Defaults();
+    private static KeyMapForm? _keyMapForm;
+
+    // 別の PC (F15) とクリップボードのテキストを共有
+    private static bool _shareClipboard = true;
 
     // キー配置 (MX Keys 風) の設定
     private static bool _remapEnabled = false;
@@ -111,202 +123,8 @@ static class Program
 
     private readonly record struct KeyboardState(KeyboardStatus Status, byte Level = 0, bool Charging = false);
 
-    // --- 多言語辞書 ---
-    private static readonly Dictionary<string, Dictionary<string, string>> LocalizedText = new()
-    {
-        ["en"] = new()
-        {
-            ["checking"] = "Checking connection...",
-            ["not_connected"] = "Not Connected",
-            ["click_retry"] = "Not Connected (Click to retry)",
-            ["click_refresh"] = "Click to refresh now",
-            ["charging"] = "Charging",
-            ["unavailable"] = "Battery unavailable",
-            ["unavailable_retry"] = "Battery unavailable (Click to retry)",
-            ["open_history"] = "Battery History...",
-            ["no_history"] = "No battery history has been recorded yet.",
-            ["history_title"] = "Magic Keyboard Battery History",
-            ["range_24h"] = "24 hours",
-            ["range_7d"] = "7 days",
-            ["range_30d"] = "30 days",
-            ["range_all"] = "All",
-            ["stat_current"] = "Current level",
-            ["stat_drain"] = "Average drain",
-            ["stat_drain_value"] = "{0:0.#}% / day",
-            ["stat_remaining"] = "Estimated time left",
-            ["stat_days_value"] = "~{0:0.#} days",
-            ["stat_hours_value"] = "~{0:0} hours",
-            ["stat_not_enough"] = "Not enough data",
-            ["stat_last_charge"] = "Last charged",
-            ["ago_days"] = "{0} days ago",
-            ["ago_hours"] = "{0} hours ago",
-            ["ago_minutes"] = "{0} min ago",
-            ["chart_battery"] = "Battery level",
-            ["chart_threshold"] = "Alert {0}%",
-            ["chart_threshold_legend"] = "Low battery alert",
-            ["btn_open_csv"] = "Open CSV",
-            ["btn_refresh"] = "Refresh",
-            ["open_settings"] = "Settings...",
-            ["exit_app"] = "Quit MagicKeyBattery",
-            ["already_running"] = "MagicKeyBattery is already running in the system tray.",
-            ["dialog_title"] = "MagicKeyBattery Settings",
-            ["lbl_interval"] = "Update Interval (Min):",
-            ["lbl_threshold"] = "Low Battery Notification (%):",
-            ["lbl_hint"] = "*Set to 0 to disable notifications",
-            ["chk_startup"] = "Run at Windows Startup",
-            ["lbl_keyboard"] = "Keyboard layout (like Logitech MX Keys)",
-            ["chk_remap"] = "Use MX Keys layout (Ctrl | Win | Alt ... AltGr | Ctrl)",
-            ["chk_media_keys"] = "F1–F12 as media keys (hold Ctrl/Alt/Shift/Win for F-keys)",
-            ["chk_swap_iso"] = "Swap ^ and < keys (German Apple keyboard)",
-            ["menu_media_keys"] = "F1–F12 as Media Keys",
-            ["open_devices"] = "Devices (F13 PC · F14 TV · F15 Phone/PC)...",
-            ["serial_label"] = "Serial",
-            ["serial_copied"] = "Serial number copied to the clipboard.",
-            ["chk_device_switching"] = "F13 / F14 / F15 switch typing to PC / TV / Phone",
-            ["mode_pc"] = "PC",
-            ["mode_tv"] = "Typing on TV",
-            ["mode_phone"] = "Typing on phone",
-            ["tv_not_configured"] = "TV not set up (tray → Devices)",
-            ["tv_unreachable"] = "TV not reachable — back to PC",
-            ["mode_remote"] = "Typing on",
-            ["remote_connecting"] = "Connecting to the other PC...",
-            ["remote_not_configured"] = "Other PC not paired (tray → Devices)",
-            ["remote_disconnected"] = "Other PC disconnected — back to this PC",
-            ["devices_f15"] = "F15 connects to",
-            ["devices_f15_phone"] = "📱 Android phone",
-            ["devices_f15_pc"] = "🖥 Another PC",
-            ["devices_pc_hint"] = "On the other PC: run MagicKeyBattery → tray → Devices → turn on \"Allow this PC to be controlled\" → \"Show pairing code\". Enter that PC's address and the code here (once). Both PCs must be on the same network.",
-            ["devices_pc_address"] = "PC address:",
-            ["devices_f15_note"] = "Connections to the other PC are encrypted (TLS) and locked to that PC's certificate after pairing. Only computers on your local network are accepted. Windows may ask to allow MagicKeyBattery through the firewall on the receiving PC — allow it for Private networks only.",
-            ["devices_receiver"] = "🖥 This PC as a receiver",
-            ["devices_receiver_enable"] = "Allow this PC to be controlled from another PC's keyboard",
-            ["devices_receiver_address"] = "This PC's address",
-            ["devices_receiver_code"] = "Show pairing code",
-            ["devices_receiver_code_hint"] = "Enter this code on the other PC within 2 minutes",
-            ["devices_receiver_forget"] = "Remove paired PCs",
-            ["devices_receiver_forgotten"] = "All paired PCs removed",
-            ["devices_receiver_paired"] = "Paired",
-            ["phone_not_installed"] = "scrcpy is not installed",
-            ["phone_connecting"] = "Connecting to phone...",
-            ["devices_title"] = "Devices",
-            ["devices_tv"] = "📺 TV (F14) — LG webOS",
-            ["devices_tv_ip"] = "TV IP address:",
-            ["devices_find"] = "Find",
-            ["devices_pair"] = "Pair",
-            ["devices_tv_hint"] = "The TV must be on. On the first pairing, accept the prompt on the TV with the remote. If no prompt appears, turn on \"LG Connect Apps\" in the TV network settings.",
-            ["devices_searching"] = "Searching...",
-            ["devices_not_found"] = "Not found",
-            ["devices_tv_accept"] = "Accept the prompt on the TV...",
-            ["devices_paired"] = "Paired",
-            ["devices_phone"] = "📱 Phone (F15) — Android",
-            ["devices_phone_hint"] = "On the phone: Settings → Developer options → Wireless debugging → ON → \"Pair device with pairing code\". Enter the IP:port and code it shows (once). The phone and PC must be on the same Wi-Fi.",
-            ["devices_pair_address"] = "Pairing IP:port:",
-            ["devices_pair_code"] = "Pairing code:",
-            ["devices_test"] = "Test",
-            ["devices_pairing"] = "Pairing...",
-            ["devices_phone_found"] = "Phone connected",
-            ["devices_close"] = "Close",
-            ["btn_save"] = "Save",
-            ["notify_title"] = "Low Battery Warning",
-            ["notify_body"] = "Magic Keyboard battery is below {0}% (Current: {1}%)"
-        },
-        ["ja"] = new()
-        {
-            ["checking"] = "接続確認中...",
-            ["not_connected"] = "未接続",
-            ["click_retry"] = "未接続 (クリックで再試行)",
-            ["click_refresh"] = "クリックで今すぐ更新",
-            ["charging"] = "充電中",
-            ["unavailable"] = "残量取得不可",
-            ["unavailable_retry"] = "残量取得不可 (クリックで再試行)",
-            ["open_history"] = "バッテリー履歴...",
-            ["no_history"] = "バッテリー履歴はまだ記録されていません。",
-            ["history_title"] = "Magic Keyboard バッテリー履歴",
-            ["range_24h"] = "24時間",
-            ["range_7d"] = "7日",
-            ["range_30d"] = "30日",
-            ["range_all"] = "すべて",
-            ["stat_current"] = "現在の残量",
-            ["stat_drain"] = "平均消費",
-            ["stat_drain_value"] = "{0:0.#}% / 日",
-            ["stat_remaining"] = "推定残り時間",
-            ["stat_days_value"] = "約 {0:0.#} 日",
-            ["stat_hours_value"] = "約 {0:0} 時間",
-            ["stat_not_enough"] = "データ不足",
-            ["stat_last_charge"] = "最後の充電",
-            ["ago_days"] = "{0} 日前",
-            ["ago_hours"] = "{0} 時間前",
-            ["ago_minutes"] = "{0} 分前",
-            ["chart_battery"] = "バッテリー残量",
-            ["chart_threshold"] = "通知 {0}%",
-            ["chart_threshold_legend"] = "低残量通知",
-            ["btn_open_csv"] = "CSV を開く",
-            ["btn_refresh"] = "再読み込み",
-            ["open_settings"] = "設定...",
-            ["exit_app"] = "MagicKeyBattery を終了",
-            ["already_running"] = "MagicKeyBattery は既にタスクトレイで実行中です。",
-            ["dialog_title"] = "MagicKeyBattery 設定",
-            ["lbl_interval"] = "自動更新間隔 (分):",
-            ["lbl_threshold"] = "低残量通知を行う基準 (%):",
-            ["lbl_hint"] = "※0に設定すると通知オフになります",
-            ["chk_startup"] = "Windows起動時に実行する",
-            ["lbl_keyboard"] = "キー配置 (Logitech MX Keys 風)",
-            ["chk_remap"] = "MX Keys 配列を使う (Ctrl | Win | Alt ... AltGr | Ctrl)",
-            ["chk_media_keys"] = "F1〜F12 をメディアキーに (Ctrl/Alt/Shift/Win で F キー)",
-            ["chk_swap_iso"] = "^ と < キーを入れ替える (ドイツ語 Apple キーボード)",
-            ["menu_media_keys"] = "F1〜F12 をメディアキーに",
-            ["open_devices"] = "デバイス (F13 PC · F14 TV · F15 スマホ/PC)...",
-            ["serial_label"] = "シリアル",
-            ["serial_copied"] = "シリアル番号をクリップボードにコピーしました。",
-            ["chk_device_switching"] = "F13 / F14 / F15 で入力先を PC / TV / スマホに切り替える",
-            ["mode_pc"] = "PC",
-            ["mode_tv"] = "TV に入力中",
-            ["mode_phone"] = "スマホに入力中",
-            ["tv_not_configured"] = "TV が未設定です (トレイ → デバイス)",
-            ["tv_unreachable"] = "TV に接続できません — PC に戻りました",
-            ["mode_remote"] = "入力先:",
-            ["remote_connecting"] = "別の PC に接続中...",
-            ["remote_not_configured"] = "別の PC がペアリングされていません (トレイ → デバイス)",
-            ["remote_disconnected"] = "別の PC との接続が切れました — この PC に戻りました",
-            ["devices_f15"] = "F15 の接続先",
-            ["devices_f15_phone"] = "📱 Android スマホ",
-            ["devices_f15_pc"] = "🖥 別の PC",
-            ["devices_pc_hint"] = "相手の PC: MagicKeyBattery を起動 → トレイ → デバイス →「この PC の操作を許可」をオン →「ペアリングコードを表示」。その PC のアドレスとコードをここに入力します (初回のみ)。両方の PC を同じネットワークに接続してください。",
-            ["devices_pc_address"] = "PC のアドレス:",
-            ["devices_f15_note"] = "別の PC との通信は暗号化 (TLS) され、ペアリング後はその PC の証明書にしか接続しません。家庭内ネットワークのコンピューターだけを受け付けます。受信側の PC でファイアウォールの許可を求められたら「プライベート ネットワーク」だけを許可してください。",
-            ["devices_receiver"] = "🖥 この PC を受信側にする",
-            ["devices_receiver_enable"] = "別の PC のキーボードからこの PC の操作を許可する",
-            ["devices_receiver_address"] = "この PC のアドレス",
-            ["devices_receiver_code"] = "ペアリングコードを表示",
-            ["devices_receiver_code_hint"] = "2 分以内に相手の PC でこのコードを入力してください",
-            ["devices_receiver_forget"] = "ペアリング済みの PC を削除",
-            ["devices_receiver_forgotten"] = "ペアリング済みの PC をすべて削除しました",
-            ["devices_receiver_paired"] = "ペアリング済み",
-            ["phone_not_installed"] = "scrcpy がインストールされていません",
-            ["phone_connecting"] = "スマホに接続中...",
-            ["devices_title"] = "デバイス",
-            ["devices_tv"] = "📺 TV (F14) — LG webOS",
-            ["devices_tv_ip"] = "TV の IP アドレス:",
-            ["devices_find"] = "検索",
-            ["devices_pair"] = "ペアリング",
-            ["devices_tv_hint"] = "TV の電源を入れておいてください。初回は TV に表示される確認をリモコンで許可します。表示されない場合は TV のネットワーク設定で「LG Connect Apps」をオンにしてください。",
-            ["devices_searching"] = "検索中...",
-            ["devices_not_found"] = "見つかりません",
-            ["devices_tv_accept"] = "TV の確認画面で許可してください...",
-            ["devices_paired"] = "ペアリング済み",
-            ["devices_phone"] = "📱 スマホ (F15) — Android",
-            ["devices_phone_hint"] = "スマホ: 設定 → 開発者向けオプション → ワイヤレスデバッグ → ON →「ペア設定コードによるデバイスのペア設定」。表示された IP:ポート とコードを入力します (初回のみ)。スマホと PC は同じ Wi-Fi に接続してください。",
-            ["devices_pair_address"] = "ペア設定 IP:ポート:",
-            ["devices_pair_code"] = "ペア設定コード:",
-            ["devices_test"] = "接続テスト",
-            ["devices_pairing"] = "ペアリング中...",
-            ["devices_phone_found"] = "スマホに接続しました",
-            ["devices_close"] = "閉じる",
-            ["btn_save"] = "保存",
-            ["notify_title"] = "バッテリー残量警告",
-            ["notify_body"] = "Magic Keyboard の残量が {0}% 以下（現在: {1}%）になりました。"
-        }
-    };
+    // --- 多言語辞書 (Localization.cs) ---
+    private static Dictionary<string, Dictionary<string, string>> LocalizedText => Localization.Text;
 
     private static string T(string key)
     {
@@ -335,7 +153,7 @@ static class Program
         }
         if (!createdNew)
         {
-            MessageBox.Show(T("already_running"), APP_NAME, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(T("already_running"), APP_NAME, MessageBoxButtons.OK, MessageBoxIcon.Information, MessageBoxDefaultButton.Button1, Rtl.MessageBoxOptions);
             return;
         }
 
@@ -353,6 +171,16 @@ static class Program
         DeviceSwitcher.ConfigureTv(_tvIp, _tvClientKey, _tvCertPin, SaveTvCredentials);
         ConfigureRemotePcFromSettings();
         ApplyReceiver();
+
+        // クリップボード共有 (別の PC を操作中 / この PC が操作されている時だけ実際に送る)
+        ClipboardSync.Enabled = _shareClipboard;
+        ClipboardSync.LocalTextChanged += text =>
+        {
+            DeviceSwitcher.OnLocalClipboardChanged(text);
+            RemoteReceiver.BroadcastClipboard(text);
+        };
+        RemoteReceiver.ClipboardReceived += text => _uiContext?.Post(_ => ClipboardSync.SetFromRemote(text), null);
+        ClipboardSync.Start();
 
         _trayIcon.Visible = true;
 
@@ -404,7 +232,8 @@ static class Program
             Renderer = new AppleMenuRenderer(dark),
             Font = new Font("Segoe UI", 9.5f),
             ShowImageMargin = true,
-            Padding = new Padding(0, 5, 0, 5)
+            Padding = new Padding(0, 5, 0, 5),
+            RightToLeft = Rtl.Enabled ? RightToLeft.Yes : RightToLeft.No // アラビア語
         };
         AppleMenuRenderer.ApplyRoundedCorners(contextMenu);
         int iconSize = contextMenu.LogicalToDeviceUnits(16);
@@ -416,7 +245,9 @@ static class Program
             var item = new ToolStripMenuItem(text, glyph is TrayMenuGlyph gl ? MenuIcons.Render(gl, iconSize, iconColor) : null, onClick)
             {
                 Tag = glyph,
-                Padding = new Padding(0, 3, 0, 3)
+                Padding = new Padding(0, 3, 0, 3),
+                // 継承だけだとアラビア文字が欠けることがあるので各項目に明示的に設定
+                RightToLeft = Rtl.Enabled ? RightToLeft.Yes : RightToLeft.No
             };
             return item;
         }
@@ -445,6 +276,7 @@ static class Program
         _mediaKeysMenu.Checked = _mediaKeys;
         _mediaKeysMenu.Visible = _remapEnabled;
         contextMenu.Items.Add(_mediaKeysMenu);
+        contextMenu.Items.Add(Item(T("open_keymap"), TrayMenuGlyph.Keyboard, (s, e) => OpenKeyMap()));
 
         contextMenu.Items.Add(Item(T("open_devices"), TrayMenuGlyph.Display, (s, e) => OpenDevices()));
         contextMenu.Items.Add(Item(T("open_history"), TrayMenuGlyph.Chart, (s, e) => OpenHistory()));
@@ -470,6 +302,7 @@ static class Program
         KeyboardRemapper.Stop();
         DeviceSwitcher.Shutdown();
         RemoteReceiver.Stop();
+        ClipboardSync.Stop();
         Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
 
         if (_trayIcon != null)
@@ -747,25 +580,70 @@ static class Program
 
         SetDynamicIcon(level, true, charging: state.Charging);
         LogHistory(level, state.Charging);
+        CheckBatteryNotifications(level, state.Charging);
+    }
 
-        // 充電中は低残量通知を出さない
-        if (_notifyThreshold > 0 && level <= _notifyThreshold && !state.Charging)
+    // バッテリーの通知 (Windows 10/11 ではバルーンチップはトースト通知として表示される)
+    //   ・低残量 (初期値 20%) と緊急 (初期値 10%): 放電中に 1 回ずつ。充電するか残量が戻ったら再び通知できる
+    //   ・満充電: 100% 未満 → 100% になった時に 1 回 (ケーブルで電池を傷めないように)
+    //     充電の検出は USB 接続か「残量が増えた」ことで判断 (充電器につないでいる場合も分かる)
+    private static void CheckBatteryNotifications(byte level, bool charging)
+    {
+        if (_trayIcon == null) return;
+
+        bool rising = _previousLevel > 0 && level > _previousLevel;
+        bool chargingNow = charging || rising;
+
+        // 緊急の警告 (低残量より優先)
+        if (_criticalThreshold > 0 && level <= _criticalThreshold && !chargingNow)
+        {
+            if (!_hasNotifiedCritical)
+            {
+                _trayIcon.ShowBalloonTip(8000, T("notify_critical_title"), string.Format(T("notify_critical_body"), level) + TimeLeftText(level), ToolTipIcon.Error);
+                _hasNotifiedCritical = true;
+                _hasNotifiedLowBattery = true; // 低残量の通知はもう不要
+            }
+        }
+        else if (_notifyThreshold > 0 && level <= _notifyThreshold && !chargingNow)
         {
             if (!_hasNotifiedLowBattery)
             {
-                // Windows 10/11 ではバルーンチップはトースト通知として表示される
-                _trayIcon.ShowBalloonTip(
-                    5000,
-                    T("notify_title"),
-                    string.Format(T("notify_body"), _notifyThreshold, level),
-                    ToolTipIcon.Warning
-                );
+                _trayIcon.ShowBalloonTip(5000, T("notify_title"), string.Format(T("notify_body"), _notifyThreshold, level) + TimeLeftText(level), ToolTipIcon.Warning);
                 _hasNotifiedLowBattery = true;
             }
         }
-        else
+
+        // 充電したら (または残量が基準より上に戻ったら) 次の放電でまた通知できるように
+        if (chargingNow || level > _notifyThreshold) _hasNotifiedLowBattery = false;
+        if (chargingNow || level > _criticalThreshold) _hasNotifiedCritical = false;
+
+        // 満充電
+        if (_notifyFull && level >= 100 && !_hasNotifiedFull && (_previousLevel is > 0 and < 100 || charging))
         {
-            _hasNotifiedLowBattery = false;
+            _trayIcon.ShowBalloonTip(5000, T("notify_full_title"), T("notify_full_body"), ToolTipIcon.Info);
+            _hasNotifiedFull = true;
+        }
+        if (level < 95) _hasNotifiedFull = false;
+
+        _previousLevel = level;
+    }
+
+    // 「残り約 N 日」(履歴から平均消費を計算。データ不足なら何も付けない)
+    private static string TimeLeftText(byte level)
+    {
+        try
+        {
+            double perDay = HistoryForm.DrainPerDay(HistoryForm.LoadHistory(HistoryFile), DateTime.Now.AddDays(-14));
+            if (perDay <= 0) return "";
+            double days = level / perDay;
+            string time = days >= 1
+                ? string.Format(CultureInfo.CurrentCulture, T("time_days"), days)
+                : string.Format(CultureInfo.CurrentCulture, T("time_hours"), days * 24);
+            return string.Format(T("notify_time_left"), time);
+        }
+        catch
+        {
+            return "";
         }
     }
 
@@ -879,56 +757,90 @@ static class Program
 
     private static void ShowSettingsDialog()
     {
+        Color labelColor = Color.LightGray;
+        Color inputBack = Color.FromArgb(50, 50, 50);
+
         using Form configForm = new Form
         {
-            Width = 460,
-            Height = 450,
+            ClientSize = new Size(520, 570),
             Text = T("dialog_title"),
             StartPosition = FormStartPosition.CenterScreen,
             FormBorderStyle = FormBorderStyle.FixedDialog,
             MaximizeBox = false,
             MinimizeBox = false,
             BackColor = Color.FromArgb(30, 30, 30),
-            ForeColor = Color.White
+            ForeColor = Color.White,
+            Font = new Font("Segoe UI", 9f),
+            // 96 DPI (100%) で設計したレイアウトを画面の拡大率に合わせて拡大する
+            AutoScaleDimensions = new SizeF(96F, 96F),
+            AutoScaleMode = AutoScaleMode.Dpi,
+            ShowIcon = false
         };
-        using Font hintFont = new Font(configForm.Font.FontFamily, 7.5f);
+        using Font hintFont = new Font("Segoe UI", 8f);
+        using Font headerFont = new Font("Segoe UI Semibold", 10f);
 
-        Label lblInterval = new Label { Text = T("lbl_interval"), Left = 20, Top = 20, Width = 150, ForeColor = Color.LightGray };
-        NumericUpDown numInterval = new NumericUpDown { Left = 180, Top = 18, Width = 80, Minimum = 1, Maximum = 60, Value = _intervalMinutes, BackColor = Color.FromArgb(50, 50, 50), ForeColor = Color.White };
+        Label Header(string text, int top) => new Label { Text = text, Left = 16, Top = top, AutoSize = true, Font = headerFont, ForeColor = Color.White };
+        Label Caption(string text, int top) => new Label { Text = text, Left = 28, Top = top + 2, Width = 300, Height = 24, ForeColor = labelColor };
+        NumericUpDown Number(int top, int min, int max, int value) =>
+            new NumericUpDown { Left = 410, Top = top, Width = 90, Minimum = min, Maximum = max, Value = Math.Clamp(value, min, max), BackColor = inputBack, ForeColor = Color.White };
+        CheckBox Check(string text, int left, int top, bool value) =>
+            new CheckBox { Text = text, Left = left, Top = top, Width = 520 - left - 12, Height = 26, Checked = value, ForeColor = labelColor };
 
-        Label lblThreshold = new Label { Text = T("lbl_threshold"), Left = 20, Top = 60, Width = 150, ForeColor = Color.LightGray };
-        NumericUpDown numThreshold = new NumericUpDown { Left = 180, Top = 58, Width = 80, Minimum = 0, Maximum = 100, Value = _notifyThreshold, BackColor = Color.FromArgb(50, 50, 50), ForeColor = Color.White };
-        Label lblHint = new Label { Text = T("lbl_hint"), Left = 20, Top = 85, Width = 280, Font = hintFont, ForeColor = Color.Gray };
+        // --- バッテリー ---
+        var hdrBattery = Header("Magic Keyboard", 12);
+        var lblInterval = Caption(T("lbl_interval"), 42);
+        var numInterval = Number(42, 1, 60, _intervalMinutes);
+        var lblThreshold = Caption(T("lbl_threshold"), 72);
+        var numThreshold = Number(72, 0, 100, _notifyThreshold);
+        var lblCritical = Caption(T("lbl_critical"), 102);
+        var numCritical = Number(102, 0, 100, _criticalThreshold);
+        var lblHint = new Label { Text = T("lbl_hint"), Left = 28, Top = 130, Width = 472, Height = 20, Font = hintFont, ForeColor = Color.Gray };
+        var chkFull = Check(T("chk_notify_full"), 28, 152, _notifyFull);
 
-        Label lblLang = new Label { Text = "Language / 言語:", Left = 20, Top = 115, Width = 150, ForeColor = Color.LightGray };
-        ComboBox cmbLang = new ComboBox { Left = 180, Top = 112, Width = 80, DropDownStyle = ComboBoxStyle.DropDownList, BackColor = Color.FromArgb(50, 50, 50), ForeColor = Color.White };
-        cmbLang.Items.AddRange(new object[] { "en", "ja" });
-        cmbLang.SelectedItem = _language;
-
-        CheckBox chkStartup = new CheckBox { Text = T("chk_startup"), Left = 20, Top = 155, Width = 250, Checked = IsStartupEnabled(), ForeColor = Color.LightGray };
+        // --- 全般 ---
+        var hdrGeneral = Header("MagicKeyBattery", 190);
+        var lblLang = Caption(T("lbl_language"), 220);
+        var cmbLang = new ComboBox { Left = 360, Top = 220, Width = 140, DropDownStyle = ComboBoxStyle.DropDownList, BackColor = inputBack, ForeColor = Color.White };
+        foreach ((string code, string name) in Localization.Languages) cmbLang.Items.Add(name);
+        cmbLang.SelectedIndex = Math.Max(0, Array.FindIndex(Localization.Languages, l => l.Code == _language));
+        var chkStartup = Check(T("chk_startup"), 28, 252, IsStartupEnabled());
 
         // --- キー配置 ---
-        Label lblKeyboard = new Label { Text = T("lbl_keyboard"), Left = 20, Top = 195, Width = 400, ForeColor = Color.White };
-        CheckBox chkRemap = new CheckBox { Text = T("chk_remap"), Left = 20, Top = 220, Width = 410, Checked = _remapEnabled, ForeColor = Color.LightGray };
-        CheckBox chkMedia = new CheckBox { Text = T("chk_media_keys"), Left = 40, Top = 248, Width = 390, Checked = _mediaKeys, ForeColor = Color.LightGray };
-        CheckBox chkSwapIso = new CheckBox { Text = T("chk_swap_iso"), Left = 40, Top = 276, Width = 390, Checked = _swapIsoKeys, ForeColor = Color.LightGray };
-        CheckBox chkSwitching = new CheckBox { Text = T("chk_device_switching"), Left = 20, Top = 306, Width = 410, Checked = _deviceSwitching, ForeColor = Color.LightGray };
-        void UpdateRemapControls() => chkMedia.Enabled = chkSwapIso.Enabled = chkRemap.Checked;
+        var hdrKeyboard = Header(T("lbl_keyboard"), 290);
+        var chkRemap = Check(T("chk_remap"), 28, 320, _remapEnabled);
+        var chkMedia = Check(T("chk_media_keys"), 46, 346, _mediaKeys);
+        var chkSwapIso = Check(T("chk_swap_iso"), 46, 372, _swapIsoKeys);
+        var btnKeys = new Button { Text = T("btn_customize_keys"), Left = 46, Top = 402, Width = 200, Height = 30, FlatStyle = FlatStyle.Flat, BackColor = inputBack, ForeColor = Color.White };
+        btnKeys.FlatAppearance.BorderColor = Color.FromArgb(80, 80, 80);
+        btnKeys.Click += (s, e) => OpenKeyMap();
+        void UpdateRemapControls() => chkMedia.Enabled = chkSwapIso.Enabled = btnKeys.Enabled = chkRemap.Checked;
         chkRemap.CheckedChanged += (s, e) => UpdateRemapControls();
         UpdateRemapControls();
 
-        Button btnSave = new Button { Text = T("btn_save"), Left = 175, Top = 355, Width = 90, Height = 30, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(0, 122, 204), ForeColor = Color.White };
+        // --- デバイス ---
+        var chkSwitching = Check(T("chk_device_switching"), 28, 440, _deviceSwitching);
+        var chkClipboard = Check(T("chk_share_clipboard"), 28, 466, _shareClipboard);
+
+        var btnSave = new Button { Text = T("btn_save"), Left = 400, Top = 522, Width = 100, Height = 32, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(0, 122, 204), ForeColor = Color.White };
         btnSave.FlatAppearance.BorderSize = 0;
+        var btnCancel = new Button { Text = T("btn_cancel"), Left = 290, Top = 522, Width = 100, Height = 32, FlatStyle = FlatStyle.Flat, BackColor = inputBack, ForeColor = Color.White };
+        btnCancel.FlatAppearance.BorderColor = Color.FromArgb(80, 80, 80);
+        btnCancel.Click += (s, e) => configForm.Close();
 
         btnSave.Click += async (s, e) =>
         {
             _intervalMinutes = (int)numInterval.Value;
             _notifyThreshold = (int)numThreshold.Value;
-            _language = cmbLang.SelectedItem?.ToString() ?? "en";
+            _criticalThreshold = (int)numCritical.Value;
+            _notifyFull = chkFull.Checked;
+            _language = Localization.Languages[Math.Max(0, cmbLang.SelectedIndex)].Code;
+            Rtl.Enabled = Localization.IsRtl(_language);
             _remapEnabled = chkRemap.Checked;
             _mediaKeys = chkMedia.Checked;
             _swapIsoKeys = chkSwapIso.Checked;
             _deviceSwitching = chkSwitching.Checked;
+            _shareClipboard = chkClipboard.Checked;
+            ClipboardSync.Enabled = _shareClipboard;
 
             SaveSettings();
             ToggleStartup(chkStartup.Checked);
@@ -942,10 +854,42 @@ static class Program
             await UpdateBatteryLevelAsync();
         };
 
-        configForm.Controls.AddRange(new Control[] { lblInterval, numInterval, lblThreshold, numThreshold, lblHint, lblLang, cmbLang, chkStartup, lblKeyboard, chkRemap, chkMedia, chkSwapIso, chkSwitching, btnSave });
+        configForm.AcceptButton = btnSave;
+        configForm.CancelButton = btnCancel;
+        configForm.Controls.AddRange(new Control[]
+        {
+            hdrBattery, lblInterval, numInterval, lblThreshold, numThreshold, lblCritical, numCritical, lblHint, chkFull,
+            hdrGeneral, lblLang, cmbLang, chkStartup,
+            hdrKeyboard, chkRemap, chkMedia, chkSwapIso, btnKeys,
+            chkSwitching, chkClipboard,
+            btnCancel, btnSave
+        });
+        Rtl.Apply(configForm); // アラビア語: 左右反転
         configForm.ShowDialog();
     }
 
+    // 「キー配置」画面 (開いていれば前面に出すだけ)
+    private static void OpenKeyMap()
+    {
+        if (_keyMapForm != null && !_keyMapForm.IsDisposed)
+        {
+            _keyMapForm.Activate();
+            return;
+        }
+
+        _keyMapForm = new KeyMapForm(T, _keyMap, map =>
+        {
+            _keyMap = map;
+            SaveSettings();
+            KeyboardRemapper.SetMapping(_keyMap);
+        });
+        _keyMapForm.FormClosed += (s, e) =>
+        {
+            _keyMapForm?.Dispose();
+            _keyMapForm = null;
+        };
+        _keyMapForm.Show();
+    }
     private static void SaveSettings()
     {
         try
@@ -967,6 +911,10 @@ static class Program
                 key.SetValue("RemotePcTokenProtected", ProtectSecret(_remotePcToken));
                 key.SetValue("RemotePcCertPin", _remotePcCertPin);
                 key.SetValue("ReceiverEnabled", _receiverEnabled ? 1 : 0);
+                key.SetValue("CriticalThreshold", _criticalThreshold);
+                key.SetValue("NotifyFull", _notifyFull ? 1 : 0);
+                key.SetValue("ShareClipboard", _shareClipboard ? 1 : 0);
+                key.SetValue("KeyMap", KeyMapping.Serialize(_keyMap));
                 key.DeleteValue("TvClientKey", false); // 旧バージョンの平文の値を削除
             }
         }
@@ -1094,6 +1042,7 @@ static class Program
         KeyboardRemapper.SwitchingEnabled = _deviceSwitching;
         KeyboardRemapper.MediaKeys = _mediaKeys;
         KeyboardRemapper.SwapIsoKeys = _swapIsoKeys;
+        KeyboardRemapper.SetMapping(_keyMap);
 
         if (_remapEnabled || _deviceSwitching) KeyboardRemapper.Start();
         else KeyboardRemapper.Stop();
@@ -1130,6 +1079,10 @@ static class Program
                     _remotePcToken = UnprotectSecret(key.GetValue("RemotePcTokenProtected", "")?.ToString() ?? "");
                     _remotePcCertPin = key.GetValue("RemotePcCertPin", "")?.ToString() ?? "";
                     _receiverEnabled = Convert.ToInt32(key.GetValue("ReceiverEnabled", 0)) != 0;
+                    _criticalThreshold = Math.Clamp(Convert.ToInt32(key.GetValue("CriticalThreshold", 10)), 0, 100);
+                    _notifyFull = Convert.ToInt32(key.GetValue("NotifyFull", 1)) != 0;
+                    _shareClipboard = Convert.ToInt32(key.GetValue("ShareClipboard", 1)) != 0;
+                    _keyMap = KeyMapping.Parse(key.GetValue("KeyMap", "")?.ToString());
 
                     // 旧バージョンの平文キーがあれば暗号化して保存し直す
                     string legacyKey = key.GetValue("TvClientKey", "")?.ToString() ?? "";
@@ -1147,8 +1100,9 @@ static class Program
         if (!LocalizedText.ContainsKey(_language))
         {
             string currentCulture = CultureInfo.CurrentUICulture.Name.ToLowerInvariant();
-            _language = currentCulture.StartsWith("ja") ? "ja" : "en";
+            _language = currentCulture.StartsWith("ja") ? "ja" : currentCulture.StartsWith("ar") ? "ar" : "en";
         }
+        Rtl.Enabled = Localization.IsRtl(_language);
     }
 
     private static void ToggleStartup(bool enable)
