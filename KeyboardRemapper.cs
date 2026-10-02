@@ -260,6 +260,10 @@ internal static class KeyboardRemapper
             Interlocked.Exchange(ref _lastHookCallbackTick, Environment.TickCount64);
             var k = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
 
+            // TV モード: ドライバ (Magic Utilities など) が送り直した修飾キーも、チャンネル切り替え用に状態だけ追跡する
+            if ((k.flags & LLKHF_INJECTED) != 0 && DeviceSwitcher.Mode == DeviceMode.Tv)
+                DeviceSwitcher.TrackTvModifier(k.vkCode, (k.flags & LLKHF_UP) != 0);
+
             // 送信済み (自分や他のアプリ) の入力は変換しない
             if ((k.flags & LLKHF_INJECTED) == 0)
             {

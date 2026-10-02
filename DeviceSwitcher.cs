@@ -224,7 +224,7 @@ internal static class DeviceSwitcher
 
     private static void SetMode(DeviceMode mode)
     {
-        _tvShift = _tvAltGr = false;
+        _tvShift = _tvAltGr = _tvCtrl = _tvCmd = _tvAlt = false;
         // Caps Lock の状態は UI スレッドで読む (フックの専用スレッドでは GetKeyState が正しくない)
         _tvCaps = Control.IsKeyLocked(Keys.CapsLock);
         Mode = mode;
@@ -241,7 +241,7 @@ internal static class DeviceSwitcher
 
     // --- TV への転送 (フックのスレッド = UI スレッドから呼ばれる。送信はキューに積むだけ) ---
 
-    private static volatile bool _tvShift, _tvAltGr, _tvCaps;
+    private static volatile bool _tvShift, _tvAltGr, _tvCaps, _tvCtrl, _tvCmd, _tvAlt;
     private static bool _tvPlaying = true;
 
     [DllImport("user32.dll")] private static extern short GetKeyState(int nVirtKey);
@@ -250,6 +250,17 @@ internal static class DeviceSwitcher
     [DllImport("user32.dll")] private static extern IntPtr GetKeyboardLayout(uint idThread);
     [DllImport("user32.dll")]
     private static extern int ToUnicodeEx(uint wVirtKey, uint wScanCode, byte[] lpKeyState, [Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pwszBuff, int cchBuff, uint wFlags, IntPtr dwhkl);
+
+
+    public static void TrackTvModifier(uint vk, bool up)
+    {
+        switch (vk)
+        {
+            case 0xA2: case 0xA3: case 0x11: _tvCtrl = !up; break;
+            case 0x5B: _tvCmd = !up; break;
+            case 0xA4: case 0xA5: case 0x12: _tvAlt = !up; break;
+        }
+    }
 
     public static void ForwardToTv(uint vk, uint scan, bool up)
     {
@@ -261,15 +272,22 @@ internal static class DeviceSwitcher
             case 0xA0: case 0xA1: case 0x10: _tvShift = !up; return;  // Shift
             case 0x5C: _tvAltGr = !up; return;                        // 右 command = AltGr
             case 0x14: if (!up) _tvCaps = !_tvCaps; return;          // Caps Lock (TV モード中は PC 側で切り替わらないので自分で追跡)
-            case 0xA2: case 0xA3: case 0xA4: case 0xA5: case 0x5B: case 0x11: case 0x12: return; // 他の修飾キー
+            case 0xA2: case 0xA3: case 0x11: _tvCtrl = !up; return;   // Ctrl
+            case 0x5B: _tvCmd = !up; return;                          // 左 command
+            case 0xA4: case 0xA5: case 0x12: _tvAlt = !up; return;    // Option
         }
         if (up) return;
 
         // TV の画面に文字入力欄 (検索など) が開いている時だけ、文字・数字を文字として送る
         bool typing = tv.TextInputFocused;
 
+        // Ctrl / command / Option + 矢印 = チャンネル切り替え (↑ → = 次、↓ ← = 前)。矢印だけならメニュー操作
+        bool channelMod = _tvCtrl || _tvCmd || _tvAlt;
+
         string? button = vk switch
         {
+            0x26 or 0x27 when channelMod => "CHANNELUP",
+            0x28 or 0x25 when channelMod => "CHANNELDOWN",
             0x26 => "UP",
             0x28 => "DOWN",
             0x25 => "LEFT",

@@ -43,7 +43,7 @@ internal sealed class DevicesForm : Form
         // 96 DPI (100%) で設計したレイアウトを画面の拡大率に合わせて拡大する
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(520, 812);
+        ClientSize = new Size(520, 856);
         BackColor = HistoryForm.Surface;
         ForeColor = HistoryForm.TextPrimary;
         Font = new Font("Segoe UI", 9f);
@@ -51,10 +51,10 @@ internal sealed class DevicesForm : Form
         AutoScroll = true; // 画面が小さい場合はスクロール
 
         BuildTvSection(12);
-        BuildF15Section(198);
-        BuildReceiverSection(602);
+        BuildF15Section(242);
+        BuildReceiverSection(646);
 
-        var btnClose = MakeButton(_t("devices_close"), 415, 768);
+        var btnClose = MakeButton(_t("devices_close"), 415, 812);
         btnClose.Click += (s, e) => Close();
         Controls.Add(btnClose);
 
@@ -97,7 +97,8 @@ internal sealed class DevicesForm : Form
         Controls.AddRange(new Control[]
         {
             Header(_t("devices_tv"), top), Caption(_t("devices_tv_ip"), top + 36), txtIp, btnFind, btnPair, status,
-            Hint(_t("devices_tv_hint"), top + 92, 78)
+            Hint(_t("devices_tv_hint"), top + 92, 78),
+            Hint(_t("devices_tv_channels"), top + 174, 44)
         });
     }
 
