@@ -84,6 +84,8 @@ static class Program
 
     private const string REG_RUN_KEY = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
     private const string APP_NAME = "MagicKeyBattery";
+    // csproj の <Version> (例: 1.3.1)
+    private static readonly string AppVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "";
 
     // --- Win32 API 宣言 ---
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
@@ -283,6 +285,8 @@ static class Program
         contextMenu.Items.Add(Item(T("open_settings"), TrayMenuGlyph.Gear, (s, e) => ShowSettingsDialog()));
         contextMenu.Items.Add(new ToolStripSeparator());
         contextMenu.Items.Add(Item(T("exit_app"), TrayMenuGlyph.Power, (s, e) => ExitApplication()));
+        contextMenu.Items.Add(new ToolStripSeparator());
+        contextMenu.Items.Add(new ToolStripMenuItem($"{APP_NAME} v{AppVersion}") { Enabled = false });
 
         // 電池のアイコンをメニューにも表示
         _batteryMenu.Image = BatteryIcon.Render(iconSize, _lastGlyph, _lastLevel, _lastCharging, dark);
