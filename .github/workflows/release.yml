@@ -1,0 +1,68 @@
+# Builds MagicKeyBattery on every push / pull request, and publishes a GitHub Release
+# with the downloadable builds whenever a version tag (v1.2.3) is pushed.
+#
+#   git tag v1.3.7 && git push origin v1.3.7
+#
+# Release assets:
+#   MagicKeyBattery-<ver>-win-x64.zip            single exe, needs the .NET 9 Desktop Runtime (~25 MB)
+#   MagicKeyBattery-<ver>-portable-win-x64.zip   self-contained, no .NET needed (~50 MB)
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Build (Debug, warnings as errors)
+        run: dotnet build MagicKeyBattery.csproj -c Debug -warnaserror
+
+      - name: Publish (framework-dependent)
+        run: >
+          dotnet publish MagicKeyBattery.csproj -c Release -r win-x64 --self-contained false
+          -o out/fd /p:PublishSingleFile=true /p:DebugType=none
+
+      - name: Publish (portable, self-contained)
+        run: >
+          dotnet publish MagicKeyBattery.csproj -c Release -r win-x64 --self-contained true
+          -o out/portable /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true /p:DebugType=none
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $ver = if ($env:GITHUB_REF -like 'refs/tags/v*') { $env:GITHUB_REF.Substring(11) } else { 'dev' }
+          Copy-Item dist/MagicKeyBattery-Portable/README.txt out/portable/ -ErrorAction SilentlyContinue
+          Compress-Archive -Path out/fd/MagicKeyBattery.exe -DestinationPath "MagicKeyBattery-$ver-win-x64.zip"
+          Compress-Archive -Path out/portable/* -DestinationPath "MagicKeyBattery-$ver-portable-win-x64.zip"
+          Get-FileHash *.zip -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  $(Split-Path $_.Path -Leaf)" } | Set-Content SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MagicKeyBattery
+          path: |
+            *.zip
+            SHA256SUMS.txt
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            *.zip
+            SHA256SUMS.txt
+          generate_release_notes: true

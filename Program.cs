@@ -51,7 +51,11 @@ static class Program
     private static bool _mediaKeys = true;
     private static bool _swapIsoKeys = false;
     private static ToolStripMenuItem? _mediaKeysMenu;
+    private static ToolStripMenuItem? _pauseMenu;
     private static ToolStripMenuItem? _serialMenu;
+
+    // 一時停止 (ゲームなどで Apple の元のキー配置に戻したい時)。設定は変えず、このセッションの間だけ
+    private static bool _paused = false;
     private static string? _keyboardSerial;
 
     // F13/F14/F15 の入力先切り替え
@@ -288,6 +292,16 @@ static class Program
         _mediaKeysMenu.Checked = _mediaKeys;
         _mediaKeysMenu.Visible = _remapEnabled;
         contextMenu.Items.Add(_mediaKeysMenu);
+
+        // 一時停止: キー配置と F13〜F15 の切り替えを止める (✓ の間は Apple の元のキーのまま)
+        _pauseMenu = Item(T("menu_pause"), null, (s, e) => {
+            _paused = !_paused;
+            ApplyRemapSettings();
+        });
+        _pauseMenu.Checked = _paused;
+        _pauseMenu.Visible = _remapEnabled || _deviceSwitching;
+        contextMenu.Items.Add(_pauseMenu);
+
         contextMenu.Items.Add(Item(T("open_keymap"), TrayMenuGlyph.Keyboard, (s, e) => OpenKeyMap()));
 
         contextMenu.Items.Add(Item(T("open_devices"), TrayMenuGlyph.Display, (s, e) => OpenDevices()));
@@ -1047,22 +1061,34 @@ static class Program
 
     private static void ApplyRemapSettings()
     {
-        KeyboardRemapper.RemapEnabled = _remapEnabled;
-        KeyboardRemapper.SwitchingEnabled = _deviceSwitching;
+        // 一時停止中は配置も切り替えも無効 (保存された設定はそのまま)
+        bool remap = _remapEnabled && !_paused;
+        bool switching = _deviceSwitching && !_paused;
+
+        KeyboardRemapper.RemapEnabled = remap;
+        KeyboardRemapper.SwitchingEnabled = switching;
         KeyboardRemapper.MediaKeys = _mediaKeys;
         KeyboardRemapper.SwapIsoKeys = _swapIsoKeys;
         KeyboardRemapper.SetMapping(_keyMap);
 
-        if (_remapEnabled || _deviceSwitching) KeyboardRemapper.Start();
+        if (remap || switching) KeyboardRemapper.Start();
         else KeyboardRemapper.Stop();
 
-        if (!_deviceSwitching && DeviceSwitcher.Mode != DeviceMode.Pc) DeviceSwitcher.RequestSwitch(DeviceMode.Pc);
+        if (!switching && DeviceSwitcher.Mode != DeviceMode.Pc) DeviceSwitcher.RequestSwitch(DeviceMode.Pc);
 
         if (_mediaKeysMenu != null)
         {
             _mediaKeysMenu.Checked = _mediaKeys;
             _mediaKeysMenu.Visible = _remapEnabled;
+            _mediaKeysMenu.Enabled = !_paused;
         }
+        if (_pauseMenu != null)
+        {
+            _pauseMenu.Checked = _paused;
+            _pauseMenu.Visible = _remapEnabled || _deviceSwitching;
+        }
+        // トレイのヒントに「一時停止中」を付ける (次の残量更新で元に戻る)
+        if (_paused && _trayIcon != null && !_trayIcon.Text.Contains(T("paused"))) SetTrayText($"{_trayIcon.Text}  ·  {T("paused")}");
     }
 
     private static void LoadSettings()
