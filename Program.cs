@@ -82,7 +82,6 @@ static class Program
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     private static extern bool DestroyIcon(IntPtr handle);
 
-    private const string REG_RUN_KEY = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
     private const string APP_NAME = "MagicKeyBattery";
     // csproj の <Version> (例: 1.3.1)
     private static readonly string AppVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "";
@@ -138,6 +137,17 @@ static class Program
     static void Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
+
+        // --startup on|off: 自動実行の登録だけして終了 (インストール スクリプト用。実行中の本体とは別プロセスで動く)
+        int startupArg = Array.FindIndex(args, a => a.Equals("--startup", StringComparison.OrdinalIgnoreCase));
+        if (startupArg >= 0)
+        {
+            bool enable = startupArg + 1 < args.Length && args[startupArg + 1].Equals("on", StringComparison.OrdinalIgnoreCase);
+            string? error = Startup.Set(enable);
+            Environment.ExitCode = error == null ? 0 : 1;
+            if (error != null) Console.Error.WriteLine(error);
+            return;
+        }
 
         // レジストリから保存された設定をロード
         LoadSettings();
@@ -1095,29 +1105,12 @@ static class Program
         Rtl.Enabled = Localization.IsRtl(_language);
     }
 
+    // Windows 起動時の自動実行 (タスク スケジューラのログオン タスク — Startup.cs)
     private static void ToggleStartup(bool enable)
     {
-        try
-        {
-            using (RegistryKey? key = Registry.CurrentUser.OpenSubKey(REG_RUN_KEY, true))
-            {
-                if (key == null) return;
-                if (enable) key.SetValue(APP_NAME, $"\"{Application.ExecutablePath}\"");
-                else key.DeleteValue(APP_NAME, false);
-            }
-        }
-        catch { }
+        string? error = Startup.Set(enable);
+        if (error != null) _trayIcon?.ShowBalloonTip(4000, APP_NAME, error, ToolTipIcon.Warning);
     }
 
-    private static bool IsStartupEnabled()
-    {
-        try
-        {
-            using (RegistryKey? key = Registry.CurrentUser.OpenSubKey(REG_RUN_KEY, false))
-            {
-                return key != null && key.GetValue(APP_NAME) != null;
-            }
-        }
-        catch { return false; }
-    }
+    private static bool IsStartupEnabled() => Startup.IsEnabled();
 }

@@ -262,10 +262,39 @@ internal static class DeviceSwitcher
         }
     }
 
-    public static void ForwardToTv(uint vk, uint scan, bool up)
+    // 一時的な診断ログ (%TEMP%\mkb-tvtrace.log)
+    public static void Trace(string line)
+    {
+        try { File.AppendAllText(Path.Combine(Path.GetTempPath(), "mkb-tvtrace.log"), $"{DateTime.Now:HH:mm:ss.fff} {line}\r\n"); } catch { }
+    }
+
+    // スタート (Win) キーを単独で押して離した = TV のホーム (PC でスタートメニューが開くのと同じ)
+    private static bool _tvStartTap;
+
+    // action = キー配置 (MX Keys レイアウト / カスタマイズ) でそのキーに割り当てた動作
+    public static void ForwardToTv(uint vk, uint scan, bool up, KeyAction action)
     {
         TvRemote? tv = _tv;
         if (tv == null) return;
+
+        bool startKey = action == KeyAction.ModWin || (action == KeyAction.Default && (vk == 0x5B || vk == 0x5C));
+        if (startKey)
+        {
+            if (!up)
+            {
+                if (!_tvStartTap && !_tvCtrl && !_tvCmd && !_tvAlt && !_tvShift) _tvStartTap = true;
+            }
+            else if (_tvStartTap)
+            {
+                _tvStartTap = false;
+                Trace("  start tap -> HOME");
+                tv.Button("HOME");
+            }
+        }
+        else if (!up)
+        {
+            _tvStartTap = false; // 他のキーと組み合わせた (例: スタート + 矢印 = チャンネル)
+        }
 
         switch (vk)
         {
@@ -284,7 +313,24 @@ internal static class DeviceSwitcher
         // Ctrl / command / Option + 矢印 = チャンネル切り替え (↑ → = 次、↓ ← = 前)。矢印だけならメニュー操作
         bool channelMod = _tvCtrl || _tvCmd || _tvAlt;
 
-        string? button = vk switch
+        // 上段・F16〜F19 はキー配置の動作で決める (スタートメニュー = ホーム、メディア・音量はそのまま)
+        string? mapped = action switch
+        {
+            KeyAction.StartMenu => "HOME",
+            KeyAction.MediaPrevious => "REWIND",
+            KeyAction.MediaNext => "FASTFORWARD",
+            KeyAction.VolumeMute => "MUTE",
+            KeyAction.VolumeDown => "VOLUMEDOWN",
+            KeyAction.VolumeUp => "VOLUMEUP",
+            KeyAction.BrowserBack => "BACK",
+            KeyAction.ContextMenu => "MENU",
+            _ => null
+        };
+        bool mappedPlayPause = action == KeyAction.MediaPlayPause;
+        // F キーに通常のキー以外 (明るさ・Task View など TV に無いもの) を割り当てた場合は何もしない
+        bool fKeyHasOtherAction = vk >= 0x70 && vk <= 0x87 && action != KeyAction.Default && mapped == null && !mappedPlayPause;
+
+        string? button = mapped ?? (fKeyHasOtherAction || mappedPlayPause ? null : vk switch
         {
             0x26 or 0x27 when channelMod => "CHANNELUP",
             0x28 or 0x25 when channelMod => "CHANNELDOWN",
@@ -306,7 +352,7 @@ internal static class DeviceSwitcher
             0x7A => "VOLUMEDOWN", // F11
             0x7B => "VOLUMEUP",   // F12
             _ => null
-        };
+        });
 
         if (!typing && button == null)
         {
@@ -318,12 +364,13 @@ internal static class DeviceSwitcher
             else if (vk == 0x08) button = "BACK";
         }
 
-        if (vk == 0x77) // F8: 再生/一時停止
+        if (mappedPlayPause || (vk == 0x77 && action == KeyAction.Default)) // 再生/一時停止 (初期値 F8)
         {
             button = _tvPlaying ? "PAUSE" : "PLAY";
             _tvPlaying = !_tvPlaying;
         }
 
+        Trace($"  fwd vk=0x{vk:X2} action={action} ctrl={_tvCtrl} cmd={_tvCmd} alt={_tvAlt} typing={typing} -> {button ?? "(none)"}");
         if (button != null)
         {
             tv.Button(button);
@@ -412,8 +459,13 @@ internal sealed class TvRemote : IDisposable
     public void Warmup() => Enqueue(() => EnsureConnectedAsync(allowPrompt: false));
     public void Button(string name) => Enqueue(async () =>
     {
-        await EnsureConnectedAsync(allowPrompt: false);
-        await SendTextAsync(_pointer!, $"type:button\nname:{name}\n\n");
+        try
+        {
+            await EnsureConnectedAsync(allowPrompt: false);
+            await SendTextAsync(_pointer!, $"type:button\nname:{name}\n\n");
+            DeviceSwitcher.Trace($"  sent {name}");
+        }
+        catch (Exception ex) { DeviceSwitcher.Trace($"  send {name} failed: {ex.Message}"); throw; }
     });
     public void InsertText(string text) => Enqueue(() => RequestAsync("ssap://com.webos.service.ime/insertText", new { text, replace = 0 }));
     public void DeleteCharacters(int count) => Enqueue(() => RequestAsync("ssap://com.webos.service.ime/deleteCharacters", new { count }));

@@ -320,10 +320,12 @@ internal static class KeyboardRemapper
                 Interlocked.Exchange(ref _lastRefreshRequestTick, now);
                 RefreshRequested?.Invoke();
             }
-            return false;
+            // TV モード中は接続の確認が遅れていても PC にキーを漏らさない (⌘ で PC のスタートメニューが開くなど)
+            if (!(SwitchingEnabled && DeviceSwitcher.Mode == DeviceMode.Tv)) return false;
         }
 
         KeyAction action = _map.TryGetValue(vk, out KeyAction mapped) ? mapped : KeyAction.Default;
+        if (DeviceSwitcher.Mode == DeviceMode.Tv) DeviceSwitcher.Trace($"key vk=0x{vk:X2} {(up ? "up" : "down")} connected={KeyboardConnected} action={action}");
 
         // --- 入力先の切り替え (初期値 F13 / F14 / F15 → PC / TV / スマホ or 別の PC) ---
         // TV モード中でも PC に戻れるよう、TV への転送より先に処理する
@@ -344,7 +346,7 @@ internal static class KeyboardRemapper
         // --- TV モード: キーはすべて TV へ送り、PC には渡さない ---
         if (SwitchingEnabled && DeviceSwitcher.Mode == DeviceMode.Tv)
         {
-            DeviceSwitcher.ForwardToTv(vk, scan, up);
+            DeviceSwitcher.ForwardToTv(vk, scan, up, action);
             return true;
         }
 

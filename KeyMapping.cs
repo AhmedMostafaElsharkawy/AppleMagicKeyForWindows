@@ -83,12 +83,19 @@ internal static class KeyMapping
     };
 
     public static bool IsModifierAction(KeyAction a) => a >= KeyAction.ModWin;
+
+    // Win と Alt を入れ替える割り当ては Xbox Game Bar を誤作動させる:
+    //   Game Bar は raw input で物理キーを見る (フックで隠せない) ので、option(物理 Alt)→Win + R は Win+Alt+R (録画) になる
+    public static bool TriggersGameBar(uint vk, KeyAction action) =>
+        (vk is 0xA4 or 0xA5 && action == KeyAction.ModWin) ||
+        (vk is 0x5B or 0x5C && action is KeyAction.ModAlt or KeyAction.ModAltGr);
     public static bool IsSwitch(KeyAction a) => a is KeyAction.SwitchToPc or KeyAction.SwitchToTv or KeyAction.SwitchToF15;
     public static bool IsRepeatable(KeyAction a) => a is KeyAction.BrightnessDown or KeyAction.BrightnessUp;
 
-    // 押しっぱなしでキーリピートさせてよいもの (音量・修飾キー)。
+    // 押しっぱなしでキーリピートさせてよいもの (音量だけ)。
+    // 修飾キーは押下を 1 回送れば押されたままになる (繰り返すと Win が 20 回以上送られていた)。
     // 再生/一時停止や電卓などは繰り返すと何度も切り替わる/起動するので最初の 1 回だけ
-    public static bool RepeatsWhileHeld(KeyAction a) => a is KeyAction.VolumeDown or KeyAction.VolumeUp || IsModifierAction(a);
+    public static bool RepeatsWhileHeld(KeyAction a) => a is KeyAction.VolumeDown or KeyAction.VolumeUp;
 
     // キーの種類ごとに選べる動作
     public static IReadOnlyList<KeyAction> ActionsFor(KeyGroup group)

@@ -46,8 +46,14 @@ internal sealed class KeyMapForm : Form
             Text = _t("keymap_hint"), Left = 16, Top = 10, Width = 448, Height = 70, ForeColor = HistoryForm.TextMuted
         };
 
+        // Win↔Alt の入れ替えへの警告 (Game Bar の誤作動)。該当する割り当てがある時だけ表示
+        _warning = new Label
+        {
+            Left = 16, Top = 536, Width = 448, Height = 54, ForeColor = Color.FromArgb(255, 204, 0), Visible = false
+        };
+
         // キーの一覧 (スクロール)
-        var list = new Panel { Left = 0, Top = 84, Width = 480, Height = 496, AutoScroll = true, BackColor = HistoryForm.Surface };
+        var list = new Panel { Left = 0, Top = 84, Width = 480, Height = 448, AutoScroll = true, BackColor = HistoryForm.Surface };
         int y = 4;
         foreach ((KeyGroup group, string header) in new[]
         {
@@ -78,6 +84,7 @@ internal sealed class KeyMapForm : Form
                 Select(combo, current.TryGetValue(key.Vk, out KeyAction value) ? value : KeyAction.Default);
 
                 _combos[key.Vk] = combo;
+                combo.SelectedIndexChanged += (s, e) => UpdateWarning();
                 list.Controls.Add(combo);
                 y += 32;
             }
@@ -110,11 +117,29 @@ internal sealed class KeyMapForm : Form
 
         AcceptButton = btnSave;
         CancelButton = btnCancel;
-        Controls.AddRange(new Control[] { hint, list, btnReset, btnCancel, btnSave });
+        Controls.AddRange(new Control[] { hint, list, _warning, btnReset, btnCancel, btnSave });
+        UpdateWarning();
         Rtl.Apply(this);
 
         ResumeLayout(false);
         PerformLayout();
+    }
+
+    private Label _warning = null!;
+
+    private void UpdateWarning()
+    {
+        var risky = new List<string>();
+        foreach ((uint vk, ComboBox combo) in _combos)
+        {
+            if (combo.SelectedItem is ActionItem item && KeyMapping.TriggersGameBar(vk, item.Action))
+            {
+                PhysicalKey key = Array.Find(KeyMapping.Keys, k => k.Vk == vk);
+                risky.Add(key.NameKey.Length > 0 ? _t(key.NameKey) : key.Label);
+            }
+        }
+        _warning.Visible = risky.Count > 0;
+        if (risky.Count > 0) _warning.Text = string.Format(_t("keymap_gamebar_warning"), string.Join(", ", risky));
     }
 
     private string ActionName(KeyAction action, KeyGroup group) =>
