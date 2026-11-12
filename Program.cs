@@ -86,6 +86,20 @@ static class Program
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     private static extern bool DestroyIcon(IntPtr handle);
 
+    // このセッションのサインインから 5 分以内か (sihost.exe はサインイン時に起動する。高速スタートアップでは起動時間が当てにならない)
+    private static bool StartedRightAfterSignIn()
+    {
+        try
+        {
+            int session = System.Diagnostics.Process.GetCurrentProcess().SessionId;
+            foreach (var p in System.Diagnostics.Process.GetProcessesByName("sihost"))
+                using (p)
+                    if (p.SessionId == session && DateTime.Now - p.StartTime < TimeSpan.FromMinutes(5)) return true;
+        }
+        catch { }
+        return false;
+    }
+
     private const string APP_NAME = "MagicKeyBattery";
     // csproj の <Version> (例: 1.3.1)
     private static readonly string AppVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "";
@@ -169,6 +183,8 @@ static class Program
         }
         if (!createdNew)
         {
+            // サインイン直後の 2 個目 (Windows が前回のアプリを復元した等) は黙って終了する。手動で開いた時だけ知らせる
+            if (StartedRightAfterSignIn()) return;
             MessageBox.Show(T("already_running"), APP_NAME, MessageBoxButtons.OK, MessageBoxIcon.Information, MessageBoxDefaultButton.Button1, Rtl.MessageBoxOptions);
             return;
         }
